@@ -62,21 +62,32 @@ export function useAppUpdater() {
       } else {
         pendingUpdate = null
         status.value = 'up-to-date'
-        if (!silent) {
-          eventBus.emit('app:toast', {
-            type: 'success',
-            message: 'У вас установлена последняя версия программы',
-          })
-        }
+        eventBus.emit('app:toast', {
+          type: 'success',
+          message: 'Обновлений нет. У вас установлена актуальная версия!',
+        })
       }
     } catch (err: unknown) {
       console.error('[useAppUpdater] Ошибка проверки обновлений:', err)
-      status.value = 'error'
-      errorMessage.value = err instanceof Error ? err.message : String(err)
-      if (!silent) {
+      const msg = err instanceof Error ? err.message : String(err)
+      const isNotFound =
+        msg.includes('404') ||
+        msg.toLowerCase().includes('not found') ||
+        msg.toLowerCase().includes('could not find')
+
+      if (isNotFound) {
+        status.value = 'up-to-date'
+        errorMessage.value = null
         eventBus.emit('app:toast', {
-          type: 'error',
-          message: `Не удалось проверить обновления: ${errorMessage.value}`,
+          type: 'success',
+          message: 'Обновлений нет. У вас установлена актуальная версия!',
+        })
+      } else {
+        status.value = 'error'
+        errorMessage.value = msg
+        eventBus.emit('app:toast', {
+          type: 'warning',
+          message: `Проверка обновлений: ${msg}`,
         })
       }
     }

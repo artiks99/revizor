@@ -601,6 +601,17 @@ function copyRevisionUuid(id: string) {
         </button>
 
         <button
+          v-else-if="updater.status.value === 'up-to-date'"
+          type="button"
+          @click="updater.checkForUpdates(false)"
+          class="text-[10px] text-emerald-400/90 hover:text-emerald-300 transition-colors cursor-pointer flex items-center gap-1"
+          title="У вас актуальная версия программы. Нажмите для повторной проверки"
+        >
+          <span class="text-[10px]">✓</span>
+          <span>Актуально</span>
+        </button>
+
+        <button
           v-else
           type="button"
           @click="updater.checkForUpdates(false)"
