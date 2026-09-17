@@ -17,6 +17,14 @@ function getGitHubToken() {
   return null
 }
 
+function runCurl(args) {
+  const res = execSync(`curl.exe ${args}`, {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    maxBuffer: 50 * 1024 * 1024,
+  }).toString()
+  return res
+}
+
 async function main() {
   const token = getGitHubToken()
   if (!token) {
@@ -31,100 +39,97 @@ async function main() {
   const repo = 'revizor'
 
   const nsisDir = path.resolve('src-tauri/target/release/bundle/nsis')
-  const exeName = `Ревизор_${version}_x64-setup.exe`
-  const exePath = path.join(nsisDir, exeName)
+  const localExeName = `Ревизор_${version}_x64-setup.exe`
+  const localExePath = path.join(nsisDir, localExeName)
+  const sigPath = path.join(nsisDir, `${localExeName}.sig`)
   const latestJsonPath = path.join(nsisDir, 'latest.json')
+  const uploadExeName = `revizor_${version}_x64-setup.exe`
 
-  if (!fs.existsSync(exePath) || !fs.existsSync(latestJsonPath)) {
+  if (!fs.existsSync(localExePath) || !fs.existsSync(sigPath)) {
     console.error(`❌ Не найдены файлы релиза в ${nsisDir}. Сначала выполните сборку: npm run build:release`)
     process.exit(1)
   }
 
-  console.log(`\n🚀 Автоматическая публикация релиза ${tagName} в GitHub...`)
+  // 1. Формируем актуальный latest.json с ASCII ссылкой
+  const signature = fs.readFileSync(sigPath, 'utf8').trim()
+  const latestJson = {
+    version: version,
+    notes: `Обновление приложения Ревизор до версии v${version}`,
+    pub_date: new Date().toISOString(),
+    platforms: {
+      'windows-x86_64': {
+        signature: signature,
+        url: `https://github.com/${owner}/${repo}/releases/download/v${version}/${uploadExeName}`,
+      },
+    },
+  }
+  fs.writeFileSync(latestJsonPath, JSON.stringify(latestJson, null, 2), 'utf8')
 
-  const headers = {
-    Authorization: `Bearer ${token}`,
-    Accept: 'application/vnd.github+json',
-    'User-Agent': 'revizor-publisher',
+  console.log(`\n🚀 Публикация релиза ${tagName} в GitHub...`)
+
+  // 2. Получаем или создаем релиз
+  let release = null
+  try {
+    const raw = runCurl(`-s -H "Authorization: Bearer ${token}" -H "User-Agent: revizor-publisher" https://api.github.com/repos/${owner}/${repo}/releases/tags/${tagName}`)
+    const parsed = JSON.parse(raw)
+    if (parsed.id) {
+      release = parsed
+      console.log(`ℹ️ Релиз ${tagName} найден на GitHub (ID: ${release.id})`)
+    }
+  } catch (e) {
+    // не существует
   }
 
-  // 1. Проверяем или создаем релиз
-  let release = null
-  const checkRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/tags/${tagName}`, { headers })
-  if (checkRes.ok) {
-    release = await checkRes.json()
-    console.log(`ℹ️ Релиз ${tagName} уже существует (ID: ${release.id}). Будут обновлены файлы.`)
-  } else {
-    console.log(`📦 Создание нового релиза ${tagName}...`)
-    const createRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases`, {
-      method: 'POST',
-      headers: {
-        ...headers,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        tag_name: tagName,
-        name: `Ревизор ${tagName}`,
-        body: `Автоматический релиз версии ${tagName}. Адаптация таблиц для 14-дюймовых ноутбуков и компактный интерфейс.`,
-        draft: false,
-        prerelease: false,
-      }),
+  if (!release) {
+    console.log(`📦 Создание релиза ${tagName}...`)
+    const payload = JSON.stringify({
+      tag_name: tagName,
+      name: `Ревизор ${tagName}`,
+      body: `Автоматический релиз версии ${tagName}. Адаптация таблиц для 14-дюймовых ноутбуков и компактный интерфейс.`,
+      draft: false,
+      prerelease: false,
     })
-
-    if (!createRes.ok) {
-      const errText = await createRes.text()
-      console.error(`❌ Ошибка создания релиза: ${createRes.status} ${errText}`)
+    const tmpPayloadPath = path.join(nsisDir, 'release_payload.json')
+    fs.writeFileSync(tmpPayloadPath, payload, 'utf8')
+    const raw = runCurl(`-s -X POST -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" -H "User-Agent: revizor-publisher" --data-binary "@${tmpPayloadPath}" https://api.github.com/repos/${owner}/${repo}/releases`)
+    try { fs.unlinkSync(tmpPayloadPath) } catch {}
+    release = JSON.parse(raw)
+    if (!release.id) {
+      console.error('❌ Ошибка создания релиза:', raw)
       process.exit(1)
     }
-    release = await createRes.json()
-    console.log(`✅ Релиз успешно создан (ID: ${release.id})`)
+    console.log(`✅ Релиз ${tagName} создан (ID: ${release.id})`)
   }
 
-  // 2. Функция загрузки ассета
-  async function uploadAsset(fileName, filePath, contentType) {
-    // Если файл уже есть в релизе — удаляем его перед перезаписью
-    const existing = release.assets?.find((a) => a.name === fileName)
-    if (existing) {
-      console.log(`🔄 Удаление старой версии файла ${fileName}...`)
-      await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/assets/${existing.id}`, {
-        method: 'DELETE',
-        headers,
-      })
+  // 3. Удаляем старые ассеты с тем же именем, если есть
+  if (release.assets && release.assets.length > 0) {
+    for (const asset of release.assets) {
+      if (asset.name === 'latest.json' || asset.name === uploadExeName || asset.name === '_1.0.5_x64-setup.exe' || asset.name === localExeName) {
+        console.log(`🔄 Удаление старого ассета ${asset.name}...`)
+        try {
+          runCurl(`-s -X DELETE -H "Authorization: Bearer ${token}" -H "User-Agent: revizor-publisher" https://api.github.com/repos/${owner}/${repo}/releases/assets/${asset.id}`)
+        } catch (e) {}
+      }
     }
-
-    console.log(`📤 Загрузка ${fileName}...`)
-    const fileBuffer = fs.readFileSync(filePath)
-    const uploadUrl = `https://uploads.github.com/repos/${owner}/${repo}/releases/${release.id}/assets?name=${encodeURIComponent(fileName)}`
-
-    const uploadRes = await fetch(uploadUrl, {
-      method: 'POST',
-      headers: {
-        ...headers,
-        'Content-Type': contentType,
-        'Content-Length': fileBuffer.length.toString(),
-      },
-      body: fileBuffer,
-    })
-
-    if (!uploadRes.ok) {
-      const err = await uploadRes.text()
-      throw new Error(`Ошибка загрузки ${fileName}: ${uploadRes.status} ${err}`)
-    }
-
-    console.log(`✅ ${fileName} успешно загружен!`)
   }
 
-  // 3. Загружаем файлы
-  await uploadAsset('latest.json', latestJsonPath, 'application/json')
-  await uploadAsset(exeName, exePath, 'application/octet-stream')
+  // 4. Загружаем latest.json
+  console.log(`📤 Загрузка latest.json...`)
+  runCurl(`-s -X POST -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" -H "User-Agent: revizor-publisher" --data-binary "@${latestJsonPath}" "https://uploads.github.com/repos/${owner}/${repo}/releases/${release.id}/assets?name=latest.json"`)
+  console.log(`✅ latest.json загружен!`)
+
+  // 5. Загружаем инсталлятор
+  console.log(`📤 Загрузка ${uploadExeName} (это может занять 5-15 секунд)...`)
+  runCurl(`-s -X POST -H "Authorization: Bearer ${token}" -H "Content-Type: application/octet-stream" -H "User-Agent: revizor-publisher" --data-binary "@${localExePath}" "https://uploads.github.com/repos/${owner}/${repo}/releases/${release.id}/assets?name=${uploadExeName}"`)
+  console.log(`✅ ${uploadExeName} успешно загружен!`)
 
   console.log(`\n==================================================`)
-  console.log(`🎉 Релиз ${tagName} успешно опубликован на GitHub!`)
+  console.log(`🎉 Релиз ${tagName} полностью опубликован и готов к обновлению!`)
   console.log(`👉 https://github.com/${owner}/${repo}/releases/tag/${tagName}`)
   console.log(`==================================================\n`)
 }
 
 main().catch((err) => {
-  console.error('❌ Ошибка публикации:', err)
+  console.error('❌ Ошибка:', err)
   process.exit(1)
 })
