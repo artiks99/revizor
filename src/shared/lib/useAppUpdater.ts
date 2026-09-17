@@ -73,7 +73,9 @@ export function useAppUpdater() {
       const isNotFound =
         msg.includes('404') ||
         msg.toLowerCase().includes('not found') ||
-        msg.toLowerCase().includes('could not find')
+        msg.toLowerCase().includes('could not find') ||
+        msg.toLowerCase().includes('could not fetch') ||
+        msg.toLowerCase().includes('no release')
 
       if (isNotFound) {
         status.value = 'up-to-date'

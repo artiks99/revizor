@@ -1,12 +1,13 @@
 {
   "name": "revizor",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "private": true,
   "description": "Ревизор — система инвентаризации (Tauri v2 + Vue 3)",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:release": "node scripts/build.js",
     "typecheck": "vue-tsc --noEmit",
     "preview": "vite preview",
     "tauri": "tauri"
