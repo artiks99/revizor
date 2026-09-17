@@ -73,28 +73,28 @@ const {
     >
       <template #header>
         <!-- Column Titles Header Row -->
-        <tr class="border-b border-gray-800/60 bg-gray-900/90 text-xs uppercase tracking-wider text-gray-500">
+        <tr class="border-b border-gray-800/60 bg-gray-900/90 text-[11px] uppercase tracking-wider text-gray-500">
           <!-- Checkbox -->
-          <th v-if="!isReadOnly" class="px-2 py-3 w-10 text-center select-none">
+          <th v-if="!isReadOnly" class="px-1 py-2.5 w-8 text-center select-none">
             <input
               type="checkbox"
               :checked="isAllSelected"
               :indeterminate.prop="isSomeSelected"
               @change="toggleSelectAll"
               :disabled="sortedRows.length === 0"
-              class="h-4 w-4 rounded border-gray-700 bg-gray-900 text-indigo-600 focus:ring-indigo-500/50 cursor-pointer"
+              class="h-3.5 w-3.5 rounded border-gray-700 bg-gray-900 text-indigo-600 focus:ring-indigo-500/50 cursor-pointer"
               title="Выбрать все видимые позиции"
             />
           </th>
 
           <!-- Index -->
-          <th class="px-2 py-3 font-medium w-14 text-center select-none">№</th>
+          <th class="px-1 py-2.5 font-medium w-9 text-center select-none">№</th>
 
           <!-- ЛК (Артикул) -->
           <StoreTableTh
-            title="Артикул"
+            title="ЛК"
             column-key="sku"
-            width="w-36"
+            width="w-28"
             :sort-key="sortKey"
             :sort-direction="sortDirection"
             :distinct-values="() => getDistinctValues('sku')"
@@ -107,7 +107,7 @@ const {
           <StoreTableTh
             title="Наименование"
             column-key="name"
-            width="min-w-[200px]"
+            width="min-w-[120px]"
             :sort-key="sortKey"
             :sort-direction="sortDirection"
             :distinct-values="() => getDistinctValues('name')"
@@ -118,10 +118,10 @@ const {
 
           <!-- Упоминаний -->
           <StoreTableTh
-            title="Упоминаний"
+            title="Упом."
             column-key="mentionsCount"
             align="center"
-            width="w-28"
+            width="w-16"
             :sort-key="sortKey"
             :sort-direction="sortDirection"
             :distinct-values="() => getDistinctValues('mentionsCount')"
@@ -132,10 +132,10 @@ const {
 
           <!-- Факт (склад) -->
           <StoreTableTh
-            title="Факт (склад)"
+            title="Факт"
             column-key="factQuantity"
             align="right"
-            width="w-32"
+            width="w-20"
             :sort-key="sortKey"
             :sort-direction="sortDirection"
             :distinct-values="() => getDistinctValues('factQuantity')"
@@ -146,10 +146,10 @@ const {
 
           <!-- Кратность -->
           <StoreTableTh
-            title="Кратность"
+            title="Кратн."
             column-key="multiplicity"
             align="center"
-            width="w-24"
+            width="w-16"
             :sort-key="sortKey"
             :sort-direction="sortDirection"
             :distinct-values="() => getDistinctValues('multiplicity')"
@@ -160,10 +160,10 @@ const {
 
           <!-- Системный ост. -->
           <StoreTableTh
-            title="Системный ост."
+            title="Аудит"
             column-key="stockQuantity"
             align="right"
-            width="w-32"
+            width="w-20"
             :sort-key="sortKey"
             :sort-direction="sortDirection"
             :distinct-values="() => getDistinctValues('stockQuantity')"
@@ -174,10 +174,10 @@ const {
 
           <!-- Расхождение -->
           <StoreTableTh
-            title="Расхождение"
+            title="Расхожд."
             column-key="discrepancy"
             align="right"
-            width="w-32"
+            width="w-20"
             :sort-key="sortKey"
             :sort-direction="sortDirection"
             :distinct-values="() => getDistinctValues('discrepancy')"
@@ -191,7 +191,7 @@ const {
             title="299"
             column-key="is299"
             align="center"
-            width="w-20"
+            width="w-16"
             :sort-key="sortKey"
             :sort-direction="sortDirection"
             :distinct-values="() => getDistinctValues('is299')"
@@ -202,10 +202,10 @@ const {
 
           <!-- Дата изм. -->
           <StoreTableTh
-            title="Дата изм."
+            title="Дата"
             column-key="updatedAt"
             align="center"
-            width="w-36"
+            width="w-24"
             :sort-key="sortKey"
             :sort-direction="sortDirection"
             :distinct-values="() => getDistinctValues('updatedAt')"
@@ -215,7 +215,7 @@ const {
           />
 
           <!-- Actions -->
-          <th v-if="!isReadOnly" class="px-2 py-3 font-medium text-center w-20 select-none">Действия</th>
+          <th v-if="!isReadOnly" class="px-1 py-2.5 font-medium text-center w-14 select-none">Действия</th>
         </tr>
 
         <!-- Inline Add / Paste Row in Table Header -->

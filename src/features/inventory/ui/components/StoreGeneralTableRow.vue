@@ -33,37 +33,37 @@ const emit = defineEmits<{
     <!-- Checkbox -->
     <td
       v-if="!isReadOnly"
-      class="px-2 py-2.5 text-center w-10 cursor-pointer select-none transition-colors"
+      class="px-1 py-2 text-center w-8 cursor-pointer select-none transition-colors"
       :class="isSelected ? 'bg-indigo-500/20' : 'hover:bg-gray-800/40'"
       @click.stop="emit('toggle-select')"
     >
       <input
         type="checkbox"
         :checked="isSelected"
-        class="h-4 w-4 rounded border-gray-700 bg-gray-900 text-indigo-600 focus:ring-indigo-500/50 cursor-pointer pointer-events-none"
+        class="h-3.5 w-3.5 rounded border-gray-700 bg-gray-900 text-indigo-600 focus:ring-indigo-500/50 cursor-pointer pointer-events-none"
         tabindex="-1"
       />
     </td>
 
     <!-- Row number -->
-    <td class="px-2 py-2.5 text-center text-xs text-gray-500 font-mono w-14 select-none pointer-events-none">
+    <td class="px-1 py-2 text-center text-xs text-gray-500 font-mono w-9 select-none pointer-events-none">
       {{ index + 1 }}
     </td>
 
     <!-- SKU with copy -->
-    <td class="px-2.5 py-2.5 font-mono text-xs w-36 select-text">
+    <td class="px-1.5 py-2 font-mono text-xs w-28 select-text">
       <CopyableSku :sku="item.sku" text-class="text-indigo-400 font-medium" />
     </td>
 
     <!-- Name -->
-    <td class="px-3 py-2.5 text-xs font-medium text-gray-200 truncate max-w-xs select-none" :title="item.name">
-      <StoreStatusBadge v-if="item.isNotFoundInCatalog" status="nd" class="mr-1.5" />
+    <td class="px-2 py-2 text-xs font-medium text-gray-200 truncate min-w-[120px] select-none" :title="item.name">
+      <StoreStatusBadge v-if="item.isNotFoundInCatalog" status="nd" class="mr-1" />
       <span>{{ item.name }}</span>
     </td>
 
     <!-- Mentions count in fact -->
     <td
-      class="px-2 py-2.5 text-center font-mono text-xs w-28 cursor-help select-none"
+      class="px-1 py-2 text-center font-mono text-xs w-16 cursor-help select-none"
       :title="item.locationTooltip"
     >
       <StoreCountBadge :count="item.mentionsCount" />
@@ -71,46 +71,46 @@ const emit = defineEmits<{
 
     <!-- Fact Quantity -->
     <td
-      class="px-2.5 py-2.5 text-right font-mono text-xs w-32 font-semibold text-gray-200 cursor-help select-none"
+      class="px-1.5 py-2 text-right font-mono text-xs w-20 font-semibold text-gray-200 cursor-help select-none whitespace-nowrap"
       :title="item.locationTooltip"
     >
-      {{ item.factQuantity }} шт.
+      {{ item.factQuantity }}
     </td>
 
     <!-- Multiplicity -->
-    <td class="px-2 py-2.5 text-center font-mono text-xs w-24 select-none">
+    <td class="px-1 py-2 text-center font-mono text-xs w-16 select-none whitespace-nowrap">
       <StoreMultiplicityBadge :value="item.multiplicity" />
     </td>
 
     <!-- System Stock -->
-    <td class="px-2.5 py-2.5 text-right font-mono text-xs w-32 text-gray-300 select-none">
-      <span v-if="item.stockQuantity !== null">{{ item.stockQuantity }} шт.</span>
+    <td class="px-1.5 py-2 text-right font-mono text-xs w-20 text-gray-300 select-none whitespace-nowrap">
+      <span v-if="item.stockQuantity !== null">{{ item.stockQuantity }}</span>
       <span v-else class="text-gray-600">—</span>
     </td>
 
     <!-- Discrepancy -->
-    <td class="px-2.5 py-2.5 text-right font-mono text-xs w-32 select-none">
+    <td class="px-1 py-2 text-right font-mono text-xs w-20 select-none whitespace-nowrap">
       <StoreDiscrepancyBadge :value="item.discrepancy" />
     </td>
 
     <!-- 299 Badge -->
-    <td class="px-2.5 py-2.5 text-center w-20 select-none">
+    <td class="px-1 py-2 text-center w-16 select-none">
       <StoreStatusBadge v-if="item.is299" status="299" />
       <span v-else class="text-gray-600 text-xs">—</span>
     </td>
 
     <!-- Updated At (Дата изменения) -->
-    <td class="px-2.5 py-2.5 text-center text-xs text-gray-500 font-mono whitespace-nowrap w-36 select-none">
-      {{ formatDateTime(item.updatedAt) }}
+    <td class="px-1.5 py-2 text-center text-[11px] text-gray-500 font-mono whitespace-nowrap w-24 select-none" :title="formatDateTime(item.updatedAt)">
+      {{ formatDateTime(item.updatedAt).slice(0, 16) }}
     </td>
 
     <!-- Actions -->
-    <td v-if="!isReadOnly" class="px-2 py-2.5 text-center w-20 select-none">
-      <div class="flex items-center justify-center gap-1.5">
+    <td v-if="!isReadOnly" class="px-1 py-2 text-center w-14 select-none">
+      <div class="flex items-center justify-center gap-1">
         <button
           type="button"
           @click="emit('delete')"
-          class="rounded p-1 text-gray-500 hover:bg-rose-500/10 hover:text-rose-400 transition-colors cursor-pointer"
+          class="rounded p-0.5 text-gray-500 hover:bg-rose-500/10 hover:text-rose-400 transition-colors cursor-pointer text-xs"
           title="Удалить позицию"
         >
           🗑️

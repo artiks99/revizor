@@ -21,35 +21,35 @@ const {
 </script>
 
 <template>
-  <tr class="border-b border-gray-800/60 bg-gray-900/90 text-xs uppercase tracking-wider text-gray-500">
+  <tr class="border-b border-gray-800/60 bg-gray-900/90 text-[11px] uppercase tracking-wider text-gray-500">
     <!-- Checkbox Select All -->
-    <th v-if="!isReadOnly" class="px-2 py-3 w-10 text-center select-none">
+    <th v-if="!isReadOnly" class="px-1 py-2.5 w-8 text-center select-none">
       <input
         type="checkbox"
         :checked="isAllSelected"
         :indeterminate.prop="isPartiallySelected"
         @change="toggleSelectAll"
-        class="h-4 w-4 rounded border-gray-700 bg-gray-900 text-indigo-600 focus:ring-indigo-500/50 cursor-pointer"
+        class="h-3.5 w-3.5 rounded border-gray-700 bg-gray-900 text-indigo-600 focus:ring-indigo-500/50 cursor-pointer"
         title="Выбрать все видимые позиции"
       />
     </th>
 
     <!-- Index -->
-    <th class="px-2 py-3 font-medium w-14 text-center select-none">№</th>
+    <th class="px-1 py-2.5 font-medium w-9 text-center select-none">№</th>
 
     <!-- Артикул (ЛК) -->
     <th
-      class="px-2.5 py-3 font-medium w-36 select-none transition-colors hover:bg-gray-800/40"
+      class="px-1.5 py-2.5 font-medium w-28 select-none transition-colors hover:bg-gray-800/40"
       :class="{ 'text-indigo-400 font-semibold bg-gray-800/20': sortKey === 'sku' }"
     >
-      <div class="flex items-center justify-between gap-1">
+      <div class="flex items-center justify-between gap-0.5">
         <div
           @click="toggleSort('sku')"
           class="flex items-center gap-1 cursor-pointer flex-1"
           title="Нажмите для сортировки по артикулу"
         >
-          <span>Артикул</span>
-          <span class="text-xs transition-opacity" :class="sortKey === 'sku' ? 'text-indigo-400 opacity-100 font-bold' : 'opacity-30 hover:opacity-80'">
+          <span>ЛК</span>
+          <span class="text-[10px] transition-opacity" :class="sortKey === 'sku' ? 'text-indigo-400 opacity-100 font-bold' : 'opacity-30 hover:opacity-80'">
             <template v-if="sortKey === 'sku'">
               {{ sortDirection === 'asc' ? '▲' : '▼' }}
             </template>
@@ -67,17 +67,17 @@ const {
 
     <!-- Наименование -->
     <th
-      class="px-3 py-3 font-medium select-none transition-colors hover:bg-gray-800/40 min-w-[200px]"
+      class="px-2 py-2.5 font-medium select-none transition-colors hover:bg-gray-800/40 min-w-[120px]"
       :class="{ 'text-indigo-400 font-semibold bg-gray-800/20': sortKey === 'name' }"
     >
-      <div class="flex items-center justify-between gap-1.5">
+      <div class="flex items-center justify-between gap-1">
         <div
           @click="toggleSort('name')"
-          class="flex items-center gap-1.5 cursor-pointer flex-1"
+          class="flex items-center gap-1 cursor-pointer flex-1"
           title="Нажмите для сортировки по наименованию"
         >
           <span>Наименование</span>
-          <span class="text-xs transition-opacity" :class="sortKey === 'name' ? 'text-indigo-400 opacity-100 font-bold' : 'opacity-30 hover:opacity-80'">
+          <span class="text-[10px] transition-opacity" :class="sortKey === 'name' ? 'text-indigo-400 opacity-100 font-bold' : 'opacity-30 hover:opacity-80'">
             <template v-if="sortKey === 'name'">
               {{ sortDirection === 'asc' ? '▲' : '▼' }}
             </template>
@@ -95,17 +95,17 @@ const {
 
     <!-- Упоминаний -->
     <th
-      class="px-2 py-3 font-medium w-28 text-center select-none transition-colors hover:bg-gray-800/40"
+      class="px-1 py-2.5 font-medium w-16 text-center select-none transition-colors hover:bg-gray-800/40"
       :class="{ 'text-indigo-400 font-semibold bg-gray-800/20': sortKey === 'mentions' }"
     >
-      <div class="flex items-center justify-center gap-1">
+      <div class="flex items-center justify-center gap-0.5">
         <div
           @click="toggleSort('mentions')"
-          class="flex items-center gap-1 cursor-pointer"
-          title="Нажмите для сортировки по количеству упоминаний"
+          class="flex items-center gap-0.5 cursor-pointer"
+          title="Упоминания: количество повторений ЛК в ревизии"
         >
-          <span>Упоминание</span>
-          <span class="text-xs transition-opacity" :class="sortKey === 'mentions' ? 'text-indigo-400 opacity-100 font-bold' : 'opacity-30 hover:opacity-80'">
+          <span>Упом.</span>
+          <span class="text-[10px] transition-opacity" :class="sortKey === 'mentions' ? 'text-indigo-400 opacity-100 font-bold' : 'opacity-30 hover:opacity-80'">
             <template v-if="sortKey === 'mentions'">
               {{ sortDirection === 'asc' ? '▲' : '▼' }}
             </template>
@@ -123,17 +123,17 @@ const {
 
     <!-- Локация -->
     <th
-      class="px-2.5 py-3 font-medium w-36 select-none transition-colors hover:bg-gray-800/40"
+      class="px-1.5 py-2.5 font-medium w-24 select-none transition-colors hover:bg-gray-800/40"
       :class="{ 'text-indigo-400 font-semibold bg-gray-800/20': sortKey === 'location' }"
     >
-      <div class="flex items-center justify-between gap-1">
+      <div class="flex items-center justify-between gap-0.5">
         <div
           @click="toggleSort('location')"
-          class="flex items-center gap-1 cursor-pointer flex-1"
+          class="flex items-center gap-0.5 cursor-pointer flex-1"
           title="Нажмите для сортировки по локации"
         >
           <span>Локация</span>
-          <span class="text-xs transition-opacity" :class="sortKey === 'location' ? 'text-indigo-400 opacity-100 font-bold' : 'opacity-30 hover:opacity-80'">
+          <span class="text-[10px] transition-opacity" :class="sortKey === 'location' ? 'text-indigo-400 opacity-100 font-bold' : 'opacity-30 hover:opacity-80'">
             <template v-if="sortKey === 'location'">
               {{ sortDirection === 'asc' ? '▲' : '▼' }}
             </template>
@@ -151,10 +151,10 @@ const {
 
     <!-- Количество -->
     <th
-      class="px-2.5 py-3 font-medium text-right w-32 select-none transition-colors hover:bg-gray-800/40 whitespace-nowrap"
+      class="px-1.5 py-2.5 font-medium text-right w-20 select-none transition-colors hover:bg-gray-800/40 whitespace-nowrap"
       :class="{ 'text-indigo-400 font-semibold bg-gray-800/20': sortKey === 'quantity' }"
     >
-      <div class="flex items-center justify-end gap-1 whitespace-nowrap">
+      <div class="flex items-center justify-end gap-0.5 whitespace-nowrap">
         <ExcelColumnFilter
           title="Количество"
           :distinct-values="() => getDistinctValues('quantity')"
@@ -164,11 +164,11 @@ const {
         />
         <div
           @click="toggleSort('quantity')"
-          class="flex items-center gap-1 cursor-pointer whitespace-nowrap"
+          class="flex items-center gap-0.5 cursor-pointer whitespace-nowrap"
           title="Нажмите для сортировки по количеству"
         >
           <span>Кол-во</span>
-          <span class="text-xs transition-opacity" :class="sortKey === 'quantity' ? 'text-indigo-400 opacity-100 font-bold' : 'opacity-30 hover:opacity-80'">
+          <span class="text-[10px] transition-opacity" :class="sortKey === 'quantity' ? 'text-indigo-400 opacity-100 font-bold' : 'opacity-30 hover:opacity-80'">
             <template v-if="sortKey === 'quantity'">
               {{ sortDirection === 'asc' ? '▲' : '▼' }}
             </template>
@@ -180,17 +180,17 @@ const {
 
     <!-- Номер коробки -->
     <th
-      class="px-2.5 py-3 font-medium text-center w-28 select-none transition-colors hover:bg-gray-800/40"
+      class="px-1.5 py-2.5 font-medium text-center w-20 select-none transition-colors hover:bg-gray-800/40"
       :class="{ 'text-indigo-400 font-semibold bg-gray-800/20': sortKey === 'boxNumber' }"
     >
-      <div class="flex items-center justify-center gap-1">
+      <div class="flex items-center justify-center gap-0.5">
         <div
           @click="toggleSort('boxNumber')"
-          class="flex items-center gap-1 cursor-pointer"
+          class="flex items-center gap-0.5 cursor-pointer"
           title="Нажмите для сортировки по номеру коробки"
         >
-          <span>№ коробки</span>
-          <span class="text-xs transition-opacity" :class="sortKey === 'boxNumber' ? 'text-indigo-400 opacity-100 font-bold' : 'opacity-30 hover:opacity-80'">
+          <span>№ кор.</span>
+          <span class="text-[10px] transition-opacity" :class="sortKey === 'boxNumber' ? 'text-indigo-400 opacity-100 font-bold' : 'opacity-30 hover:opacity-80'">
             <template v-if="sortKey === 'boxNumber'">
               {{ sortDirection === 'asc' ? '▲' : '▼' }}
             </template>
@@ -208,17 +208,17 @@ const {
 
     <!-- Кратность -->
     <th
-      class="px-2.5 py-3 font-medium text-center w-24 select-none transition-colors hover:bg-gray-800/40 whitespace-nowrap"
+      class="px-1 py-2.5 font-medium text-center w-16 select-none transition-colors hover:bg-gray-800/40 whitespace-nowrap"
       :class="{ 'text-indigo-400 font-semibold bg-gray-800/20': sortKey === 'multiplicity' }"
     >
-      <div class="flex items-center justify-center gap-1 whitespace-nowrap">
+      <div class="flex items-center justify-center gap-0.5 whitespace-nowrap">
         <div
           @click="toggleSort('multiplicity')"
-          class="flex items-center gap-1 cursor-pointer whitespace-nowrap"
+          class="flex items-center gap-0.5 cursor-pointer whitespace-nowrap"
           title="Нажмите для сортировки по кратности"
         >
-          <span>Кратность</span>
-          <span class="text-xs transition-opacity" :class="sortKey === 'multiplicity' ? 'text-indigo-400 opacity-100 font-bold' : 'opacity-30 hover:opacity-80'">
+          <span>Кратн.</span>
+          <span class="text-[10px] transition-opacity" :class="sortKey === 'multiplicity' ? 'text-indigo-400 opacity-100 font-bold' : 'opacity-30 hover:opacity-80'">
             <template v-if="sortKey === 'multiplicity'">
               {{ sortDirection === 'asc' ? '▲' : '▼' }}
             </template>
@@ -236,10 +236,10 @@ const {
 
     <!-- Системный остаток (Аудит) -->
     <th
-      class="px-2.5 py-3 font-medium text-right w-28 select-none transition-colors hover:bg-gray-800/40 whitespace-nowrap"
+      class="px-1.5 py-2.5 font-medium text-right w-20 select-none transition-colors hover:bg-gray-800/40 whitespace-nowrap"
       :class="{ 'text-indigo-400 font-semibold bg-gray-800/20': sortKey === 'audit' }"
     >
-      <div class="flex items-center justify-end gap-1 whitespace-nowrap">
+      <div class="flex items-center justify-end gap-0.5 whitespace-nowrap">
         <ExcelColumnFilter
           title="Аудит"
           :distinct-values="() => getDistinctValues('audit')"
@@ -249,11 +249,11 @@ const {
         />
         <div
           @click="toggleSort('audit')"
-          class="flex items-center gap-1 cursor-pointer whitespace-nowrap"
-          title="Нажмите для сортировки по системному количеству (аудит)"
+          class="flex items-center gap-0.5 cursor-pointer whitespace-nowrap"
+          title="Системный остаток (аудит)"
         >
           <span>Аудит</span>
-          <span class="text-xs transition-opacity" :class="sortKey === 'audit' ? 'text-indigo-400 opacity-100 font-bold' : 'opacity-30 hover:opacity-80'">
+          <span class="text-[10px] transition-opacity" :class="sortKey === 'audit' ? 'text-indigo-400 opacity-100 font-bold' : 'opacity-30 hover:opacity-80'">
             <template v-if="sortKey === 'audit'">
               {{ sortDirection === 'asc' ? '▲' : '▼' }}
             </template>
@@ -265,17 +265,17 @@ const {
 
     <!-- Расхождения -->
     <th
-      class="px-2.5 py-3 font-medium text-center w-28 select-none transition-colors hover:bg-gray-800/40"
+      class="px-1 py-2.5 font-medium text-center w-20 select-none transition-colors hover:bg-gray-800/40"
       :class="{ 'text-indigo-400 font-semibold bg-gray-800/20': sortKey === 'discrepancy' }"
     >
-      <div class="flex items-center justify-center gap-1">
+      <div class="flex items-center justify-center gap-0.5">
         <div
           @click="toggleSort('discrepancy')"
-          class="flex items-center gap-1 cursor-pointer"
-          title="Нажмите для сортировки по расхождению"
+          class="flex items-center gap-0.5 cursor-pointer"
+          title="Расхождение (факт минус остаток)"
         >
-          <span>Расхождения</span>
-          <span class="text-xs transition-opacity" :class="sortKey === 'discrepancy' ? 'text-indigo-400 opacity-100 font-bold' : 'opacity-30 hover:opacity-80'">
+          <span>Расхожд.</span>
+          <span class="text-[10px] transition-opacity" :class="sortKey === 'discrepancy' ? 'text-indigo-400 opacity-100 font-bold' : 'opacity-30 hover:opacity-80'">
             <template v-if="sortKey === 'discrepancy'">
               {{ sortDirection === 'asc' ? '▲' : '▼' }}
             </template>
@@ -293,17 +293,17 @@ const {
 
     <!-- Дата изм. -->
     <th
-      class="px-2.5 py-3 font-medium text-center w-36 select-none transition-colors hover:bg-gray-800/40"
+      class="px-1.5 py-2.5 font-medium text-center w-24 select-none transition-colors hover:bg-gray-800/40"
       :class="{ 'text-indigo-400 font-semibold bg-gray-800/20': sortKey === 'updatedAt' }"
     >
-      <div class="flex items-center justify-center gap-1">
+      <div class="flex items-center justify-center gap-0.5">
         <div
           @click="toggleSort('updatedAt')"
-          class="flex items-center gap-1 cursor-pointer"
-          title="Нажмите для сортировки по дате изменения"
+          class="flex items-center gap-0.5 cursor-pointer"
+          title="Дата изменения"
         >
-          <span>Дата изм.</span>
-          <span class="text-xs transition-opacity" :class="sortKey === 'updatedAt' ? 'text-indigo-400 opacity-100 font-bold' : 'opacity-30 hover:opacity-80'">
+          <span>Дата</span>
+          <span class="text-[10px] transition-opacity" :class="sortKey === 'updatedAt' ? 'text-indigo-400 opacity-100 font-bold' : 'opacity-30 hover:opacity-80'">
             <template v-if="sortKey === 'updatedAt'">
               {{ sortDirection === 'asc' ? '▲' : '▼' }}
             </template>
@@ -320,6 +320,6 @@ const {
     </th>
 
     <!-- Actions -->
-    <th v-if="!isReadOnly" class="px-2 py-3 font-medium text-center w-20 select-none">Действия</th>
+    <th v-if="!isReadOnly" class="px-1 py-2.5 font-medium text-center w-14 select-none">Действия</th>
   </tr>
 </template>

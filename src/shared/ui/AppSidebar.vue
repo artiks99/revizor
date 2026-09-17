@@ -118,14 +118,14 @@ function copyRevisionUuid(id: string) {
 
 <template>
   <aside
-    class="flex w-72 shrink-0 flex-col border-r backdrop-blur-sm"
+    class="flex w-60 lg:w-64 2xl:w-72 shrink-0 flex-col border-r backdrop-blur-sm transition-all duration-200"
     :style="{
       backgroundColor: 'var(--rev-surface-sidebar)',
       borderColor: 'var(--rev-border)',
     }"
   >
     <!-- Logo -->
-    <div class="flex items-center gap-3 border-b px-5 py-4" :style="{ borderColor: 'var(--rev-border)' }">
+    <div class="flex items-center gap-3 border-b px-4 py-3.5" :style="{ borderColor: 'var(--rev-border)' }">
       <div
         class="flex h-9 w-9 items-center justify-center rounded-lg text-lg font-bold text-white shadow-lg"
         style="background: linear-gradient(135deg, #5348CA, #DF4232); box-shadow: 0 4px 14px rgba(83, 72, 202, 0.3)"
@@ -574,7 +574,7 @@ function copyRevisionUuid(id: string) {
     </nav>
 
     <!-- Footer -->
-    <div class="border-t px-5 py-3" :style="{ borderColor: 'var(--rev-border)' }">
+    <div class="border-t px-4 py-3" :style="{ borderColor: 'var(--rev-border)' }">
       <div class="flex items-center justify-between">
         <span class="text-[11px] font-mono text-gray-500">v{{ appVersion }}</span>
 

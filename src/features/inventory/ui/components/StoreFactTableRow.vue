@@ -55,7 +55,7 @@ const {
     <!-- Checkbox -->
     <td
       v-if="!isReadOnly"
-      class="px-2 py-2.5 text-center w-10 cursor-pointer select-none transition-colors"
+      class="px-1 py-2 text-center w-8 cursor-pointer select-none transition-colors"
       :class="selectedIds.has(item.id) ? 'bg-indigo-500/20' : 'hover:bg-gray-800/40'"
       @mousedown.prevent="onCheckboxCellMouseDown(item.id, index, $event)"
       @mouseenter="onCheckboxCellMouseEnter(index)"
@@ -64,14 +64,14 @@ const {
       <input
         type="checkbox"
         :checked="selectedIds.has(item.id)"
-        class="h-4 w-4 rounded border-gray-700 bg-gray-900 text-indigo-600 focus:ring-indigo-500/50 cursor-pointer pointer-events-none"
+        class="h-3.5 w-3.5 rounded border-gray-700 bg-gray-900 text-indigo-600 focus:ring-indigo-500/50 cursor-pointer pointer-events-none"
         tabindex="-1"
       />
     </td>
 
     <!-- Index -->
     <td
-      class="px-2 py-2.5 text-center text-xs text-gray-500 font-mono w-14 cursor-pointer select-none hover:text-indigo-300 transition-colors pointer-events-auto"
+      class="px-1 py-2 text-center text-xs text-gray-500 font-mono w-9 cursor-pointer select-none hover:text-indigo-300 transition-colors pointer-events-auto"
       @mousedown="onCellMouseDown(index, 'row', item.id, $event)"
       @mouseenter="onCellMouseEnter(index, 'row')"
       title="Зажмите и тяните для выделения строк"
@@ -81,7 +81,7 @@ const {
 
     <!-- SKU (ЛК) -->
     <td
-      class="px-2.5 py-2.5 font-mono text-xs w-36 transition-colors select-text"
+      class="px-1.5 py-2 font-mono text-xs w-28 transition-colors select-text"
       :class="getCellSelectionClasses(index, 'sku')"
       @mousedown="onCellMouseDown(index, 'sku', item.id, $event)"
       @mouseenter="onCellMouseEnter(index, 'sku')"
@@ -89,7 +89,7 @@ const {
     >
       <div
         v-if="!isReadOnly && inlineEditing?.id === item.id && inlineEditing?.field === 'sku'"
-        class="flex items-center gap-1"
+        class="flex items-center gap-0.5"
       >
         <input
           v-focus
@@ -101,7 +101,7 @@ const {
           @keydown.enter="saveInlineEdit(item)"
           @keydown.esc="cancelInlineEdit"
           @blur="saveInlineEdit(item)"
-          class="w-full rounded bg-gray-950 px-2 py-1 text-xs font-mono font-bold text-indigo-300 ring-1 ring-indigo-500 focus:outline-none shadow-sm"
+          class="w-full rounded bg-gray-950 px-1 py-0.5 text-xs font-mono font-bold text-indigo-300 ring-1 ring-indigo-500 focus:outline-none shadow-sm"
         />
       </div>
       <div
@@ -110,12 +110,12 @@ const {
         :title="isReadOnly ? '' : 'Двойной клик или ✏️ — редактировать; зажмите мышь и тяните — выделить ЛК'"
       >
         <span
-          class="font-medium"
+          class="font-medium truncate"
           :class="isCellSelected(index, 'sku') ? 'text-indigo-200 font-bold' : 'text-indigo-400 group-hover:text-indigo-300 group-hover:underline'"
         >
           {{ item.sku }}
         </span>
-        <div class="flex items-center gap-1">
+        <div class="flex items-center gap-0.5">
           <button
             type="button"
             @click.stop="handleCopySkuSingle(item.sku, item.id)"
@@ -124,13 +124,13 @@ const {
             :title="copiedSkuId === item.id ? 'Скопировано!' : 'Скопировать ЛК'"
           >
             <span v-if="copiedSkuId === item.id" class="text-emerald-400 text-xs font-bold">✓</span>
-            <span v-else class="text-[11px]">📋</span>
+            <span v-else class="text-[10px]">📋</span>
           </button>
           <button
             v-if="!isReadOnly"
             type="button"
             @click.stop="startInlineEdit(item, 'sku')"
-            class="p-0.5 rounded text-gray-400 hover:text-indigo-300 transition-all cursor-pointer opacity-0 group-hover:opacity-70 hover:!opacity-100"
+            class="p-0.5 rounded text-gray-400 hover:text-indigo-300 transition-all cursor-pointer opacity-0 group-hover:opacity-70 hover:!opacity-100 text-[10px]"
             title="Редактировать артикул"
           >
             ✏️
@@ -146,10 +146,10 @@ const {
 
     <!-- Наименование -->
     <td
-      class="px-3 py-2.5 text-xs font-medium text-gray-200 cursor-default min-w-[200px] group/name"
+      class="px-2 py-2 text-xs font-medium text-gray-200 cursor-default min-w-[120px] group/name"
       :title="store.getFactItemName(item.sku, item.name)"
     >
-      <div class="flex items-center justify-between gap-1.5">
+      <div class="flex items-center justify-between gap-1">
         <span class="truncate">{{ store.getFactItemName(item.sku, item.name) }}</span>
         <button
           type="button"
@@ -159,19 +159,19 @@ const {
           :title="copiedNameId === item.id ? 'Скопировано!' : 'Скопировать наименование'"
         >
           <span v-if="copiedNameId === item.id" class="text-emerald-400 text-xs font-bold">✓</span>
-          <span v-else class="text-[11px]">📋</span>
+          <span v-else class="text-[10px]">📋</span>
         </button>
       </div>
     </td>
 
     <!-- Упоминаний -->
     <td
-      class="px-2 py-2.5 text-center tabular-nums text-xs font-mono font-medium cursor-help w-28"
+      class="px-1 py-2 text-center tabular-nums text-xs font-mono font-medium cursor-help w-16"
       :title="getItemTooltip(item)"
     >
       <span
         v-if="getSkuMentions(item.sku) > 1"
-        class="inline-flex items-center justify-center min-w-[24px] rounded-full bg-rose-500/20 px-2 py-0.5 text-xs font-bold text-rose-300 ring-1 ring-rose-500/40"
+        class="inline-flex items-center justify-center min-w-[20px] rounded-full bg-rose-500/20 px-1.5 py-0.5 text-xs font-bold text-rose-300 ring-1 ring-rose-500/40"
       >
         {{ getSkuMentions(item.sku) }}
       </span>
@@ -185,7 +185,7 @@ const {
 
     <!-- Локация -->
     <td
-      class="px-2.5 py-2.5 font-mono text-xs w-36 transition-colors"
+      class="px-1.5 py-2 font-mono text-xs w-24 transition-colors"
       :class="getCellSelectionClasses(index, 'location')"
       @mousedown="onCellMouseDown(index, 'location', item.id, $event)"
       @mouseenter="onCellMouseEnter(index, 'location')"
@@ -203,34 +203,34 @@ const {
           @keydown.enter="saveInlineEdit(item)"
           @keydown.esc="cancelInlineEdit"
           @blur="saveInlineEdit(item)"
-          class="w-full rounded bg-gray-950 px-2 py-1 text-xs text-indigo-200 ring-1 ring-indigo-500 focus:outline-none shadow-sm"
+          class="w-full rounded bg-gray-950 px-1.5 py-0.5 text-xs text-indigo-200 ring-1 ring-indigo-500 focus:outline-none shadow-sm"
         />
       </div>
       <div
         v-else
-        class="flex items-center justify-between group cursor-pointer text-gray-300 py-1"
+        class="flex items-center justify-between group cursor-pointer text-gray-300 py-0.5"
         :title="isReadOnly ? '' : 'Двойной клик или ✏️ — редактировать; зажмите мышь и тяните — выделить ячейки'"
       >
-        <span :class="item.location ? (isCellSelected(index, 'location') ? 'text-indigo-200 font-semibold' : 'text-gray-200') : 'text-gray-600 italic'">
+        <span class="truncate" :class="item.location ? (isCellSelected(index, 'location') ? 'text-indigo-200 font-semibold' : 'text-gray-200') : 'text-gray-600 italic'">
           {{ item.location || '—' }}
         </span>
-        <div class="flex items-center gap-1">
+        <div class="flex items-center gap-0.5">
           <button
             v-if="item.location"
             type="button"
             @click.stop="handleCopyLocation(item.location, item.id)"
             class="p-0.5 rounded text-gray-400 hover:text-indigo-300 hover:bg-gray-800 transition-all cursor-pointer"
             :class="copiedLocationId === item.id ? 'text-emerald-400 opacity-100' : 'opacity-0 group-hover:opacity-100'"
-            :title="copiedLocationId === item.id ? 'Скопировано!' : 'Скопировать название локации (Ctrl+C)'"
+            :title="copiedLocationId === item.id ? 'Скопировано!' : 'Скопировать локацию'"
           >
             <span v-if="copiedLocationId === item.id" class="text-emerald-400 text-xs font-bold">✓</span>
-            <span v-else class="text-[11px]">📋</span>
+            <span v-else class="text-[10px]">📋</span>
           </button>
           <button
             v-if="!isReadOnly"
             type="button"
             @click.stop="startInlineEdit(item, 'location')"
-            class="p-0.5 rounded text-gray-400 hover:text-indigo-300 transition-all cursor-pointer opacity-0 group-hover:opacity-70 hover:!opacity-100"
+            class="p-0.5 rounded text-gray-400 hover:text-indigo-300 transition-all cursor-pointer opacity-0 group-hover:opacity-70 hover:!opacity-100 text-[10px]"
             title="Редактировать локацию"
           >
             ✏️
@@ -246,7 +246,7 @@ const {
 
     <!-- Количество -->
     <td
-      class="px-2.5 py-2.5 font-mono text-xs w-32 text-right transition-colors"
+      class="px-1.5 py-2 font-mono text-xs w-20 text-right transition-colors"
       :class="getCellSelectionClasses(index, 'quantity')"
       @mousedown="onCellMouseDown(index, 'quantity', item.id, $event)"
       @mouseenter="onCellMouseEnter(index, 'quantity')"
@@ -265,12 +265,12 @@ const {
           @keydown.enter="saveInlineEdit(item)"
           @keydown.esc="cancelInlineEdit"
           @blur="saveInlineEdit(item)"
-          class="w-20 rounded bg-gray-950 px-2 py-1 text-right text-xs font-mono font-bold text-gray-100 ring-1 ring-indigo-500 focus:outline-none shadow-sm"
+          class="w-16 rounded bg-gray-950 px-1 py-0.5 text-right text-xs font-mono font-bold text-gray-100 ring-1 ring-indigo-500 focus:outline-none shadow-sm"
         />
       </div>
       <div
         v-else
-        class="flex items-center justify-end gap-1 group cursor-pointer py-1 whitespace-nowrap"
+        class="flex items-center justify-end gap-0.5 group cursor-pointer py-0.5 whitespace-nowrap"
         :title="isReadOnly ? '' : 'Двойной клик или ✏️ — редактировать; зажмите мышь и тяните — выделить ячейки'"
       >
         <span class="font-semibold tabular-nums whitespace-nowrap" :class="isCellSelected(index, 'quantity') ? 'text-indigo-200' : 'text-gray-100'">
@@ -280,7 +280,7 @@ const {
           v-if="!isReadOnly"
           type="button"
           @click.stop="startInlineEdit(item, 'quantity')"
-          class="p-0.5 rounded text-gray-400 hover:text-indigo-300 transition-all cursor-pointer opacity-0 group-hover:opacity-70 hover:!opacity-100"
+          class="p-0.5 rounded text-gray-400 hover:text-indigo-300 transition-all cursor-pointer opacity-0 group-hover:opacity-70 hover:!opacity-100 text-[10px]"
           title="Редактировать количество"
         >
           ✏️
@@ -295,7 +295,7 @@ const {
 
     <!-- Box Number -->
     <td
-      class="px-2.5 py-2.5 text-center font-mono text-xs w-28 transition-colors relative"
+      class="px-1.5 py-2 text-center font-mono text-xs w-20 transition-colors relative"
       :class="getCellSelectionClasses(index, 'boxNumber')"
       @mousedown="onCellMouseDown(index, 'boxNumber', item.id, $event)"
       @mouseenter="onCellMouseEnter(index, 'boxNumber')"
@@ -309,26 +309,26 @@ const {
           v-focus
           v-model="inlineEditing.value"
           type="text"
-          placeholder="№ коробки…"
+          placeholder="№ кор.…"
           @keydown.enter="saveInlineEdit(item)"
           @keydown.esc="cancelInlineEdit"
           @blur="saveInlineEdit(item)"
-          class="w-full rounded bg-gray-950 px-2 py-1 text-xs text-center font-mono font-bold text-indigo-300 ring-1 ring-indigo-500 focus:outline-none shadow-sm"
+          class="w-full rounded bg-gray-950 px-1 py-0.5 text-xs text-center font-mono font-bold text-indigo-300 ring-1 ring-indigo-500 focus:outline-none shadow-sm"
         />
       </div>
       <div
         v-else
-        class="flex items-center justify-between group cursor-pointer text-gray-300 py-1"
+        class="flex items-center justify-between group cursor-pointer text-gray-300 py-0.5"
         :title="isReadOnly ? '' : 'Двойной клик или ✏️ — редактировать; зажмите мышь и тяните — выделить ячейки'"
       >
-        <span class="w-full text-center tabular-nums" :class="item.boxNumber ? (isCellSelected(index, 'boxNumber') ? 'text-indigo-200 font-semibold' : 'text-gray-200') : 'text-gray-600 italic'">
+        <span class="w-full text-center tabular-nums truncate" :class="item.boxNumber ? (isCellSelected(index, 'boxNumber') ? 'text-indigo-200 font-semibold' : 'text-gray-200') : 'text-gray-600 italic'">
           {{ item.boxNumber || '—' }}
         </span>
         <button
           v-if="!isReadOnly"
           type="button"
           @click.stop="startInlineEdit(item, 'boxNumber')"
-          class="p-0.5 rounded text-gray-400 hover:text-indigo-300 transition-all cursor-pointer opacity-0 group-hover:opacity-70 hover:!opacity-100 shrink-0"
+          class="p-0.5 rounded text-gray-400 hover:text-indigo-300 transition-all cursor-pointer opacity-0 group-hover:opacity-70 hover:!opacity-100 shrink-0 text-[10px]"
           title="Редактировать номер коробки"
         >
           ✏️
@@ -342,18 +342,18 @@ const {
     </td>
 
     <!-- Multiplicity -->
-    <td class="px-2.5 py-2.5 text-center font-mono text-xs w-24 whitespace-nowrap">
+    <td class="px-1 py-2 text-center font-mono text-xs w-16 whitespace-nowrap">
       <StoreMultiplicityBadge :value="store.getMultiplicityValue(item.sku)" />
     </td>
 
     <!-- Audit System Qty -->
-    <td class="px-2.5 py-2.5 text-right tabular-nums font-mono text-xs w-28 whitespace-nowrap">
+    <td class="px-1.5 py-2 text-right tabular-nums font-mono text-xs w-20 whitespace-nowrap">
       <span
         v-if="store.getStockItemQuantity(item.sku) !== null"
-        class="font-semibold text-indigo-300 bg-indigo-500/15 px-2 py-0.5 rounded"
-        :title="`Системный остаток во вкладке «Системные остатки (аудит)»: ${store.getStockItemQuantity(item.sku)} шт.`"
+        class="font-semibold text-indigo-300 bg-indigo-500/15 px-1.5 py-0.5 rounded text-[11px]"
+        :title="`Системный остаток: ${store.getStockItemQuantity(item.sku)} шт.`"
       >
-        {{ store.getStockItemQuantity(item.sku) }} шт.
+        {{ store.getStockItemQuantity(item.sku) }}
       </span>
       <span v-else class="text-gray-600 font-mono" title="Товар отсутствует во вкладке остатков (аудит)">
         —
@@ -361,42 +361,42 @@ const {
     </td>
 
     <!-- Discrepancy Result Badge -->
-    <td class="px-2.5 py-2.5 text-center w-28">
+    <td class="px-1 py-2 text-center w-20">
       <span
         v-if="getFactDiscrepancy(item).type === 'ok'"
-        class="inline-flex items-center rounded-md bg-emerald-500/15 px-2 py-0.5 text-xs font-bold text-emerald-400 ring-1 ring-emerald-500/30"
-        :title="getSkuMentions(item.sku) > 1 ? `Итого по всем местам (${getSkuMentions(item.sku)}): количество совпадает с системным остатком` : 'Количество совпадает с системным остатком'"
+        class="inline-flex items-center rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-[11px] font-bold text-emerald-400 ring-1 ring-emerald-500/30"
+        :title="getSkuMentions(item.sku) > 1 ? `Итого по всем местам (${getSkuMentions(item.sku)}): количество совпадает` : 'Количество совпадает с остатком'"
       >
         ОК
       </span>
       <span
         v-else-if="getFactDiscrepancy(item).type === 'surplus'"
-        class="inline-flex items-center rounded-md bg-amber-500/15 px-2 py-0.5 text-xs font-bold text-amber-400 ring-1 ring-amber-500/30 font-mono"
-        :title="`Излишек: факт больше системного остатка на ${getFactDiscrepancy(item).text} шт.`"
+        class="inline-flex items-center rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-bold text-amber-400 ring-1 ring-amber-500/30 font-mono"
+        :title="`Излишек: +${getFactDiscrepancy(item).text}`"
       >
         {{ getFactDiscrepancy(item).text }}
       </span>
       <span
         v-else
-        class="inline-flex items-center rounded-md bg-rose-500/15 px-2 py-0.5 text-xs font-bold text-rose-400 ring-1 ring-rose-500/30 font-mono"
-        :title="`Недостача: факт меньше системного остатка на ${getFactDiscrepancy(item).text} шт.`"
+        class="inline-flex items-center rounded-md bg-rose-500/15 px-1.5 py-0.5 text-[11px] font-bold text-rose-400 ring-1 ring-rose-500/30 font-mono"
+        :title="`Недостача: ${getFactDiscrepancy(item).text}`"
       >
         {{ getFactDiscrepancy(item).text }}
       </span>
     </td>
 
     <!-- Дата изм. -->
-    <td class="px-2.5 py-2.5 text-center text-xs text-gray-500 font-mono whitespace-nowrap w-36">
-      {{ formatDateTime(item.updatedAt) }}
+    <td class="px-1.5 py-2 text-center text-[11px] text-gray-500 font-mono whitespace-nowrap w-24" :title="formatDateTime(item.updatedAt)">
+      {{ formatDateTime(item.updatedAt).slice(0, 16) }}
     </td>
 
     <!-- Actions -->
-    <td v-if="!isReadOnly" class="px-2 py-2.5 text-center w-20">
-      <div class="flex items-center justify-center gap-1.5">
+    <td v-if="!isReadOnly" class="px-1 py-2 text-center w-14">
+      <div class="flex items-center justify-center gap-1">
         <button
           type="button"
           @click="openEditModal(item)"
-          class="rounded p-1 text-gray-400 hover:bg-indigo-500/10 hover:text-indigo-300 transition-colors cursor-pointer"
+          class="rounded p-0.5 text-gray-400 hover:bg-indigo-500/10 hover:text-indigo-300 transition-colors cursor-pointer text-xs"
           title="Редактировать позицию"
         >
           ✎
@@ -404,7 +404,7 @@ const {
         <button
           type="button"
           @click="batchOps.handleDeleteRow(item.id)"
-          class="rounded p-1 text-gray-500 hover:bg-rose-500/10 hover:text-rose-400 transition-colors cursor-pointer"
+          class="rounded p-0.5 text-gray-500 hover:bg-rose-500/10 hover:text-rose-400 transition-colors cursor-pointer text-xs"
           title="Удалить позицию"
         >
           🗑️

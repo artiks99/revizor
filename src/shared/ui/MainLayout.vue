@@ -193,7 +193,7 @@ onUnmounted(() => {
     <div class="flex flex-1 flex-col overflow-hidden">
       <AppHeader />
 
-      <main class="flex-1 overflow-y-auto p-6" :style="{ backgroundColor: 'var(--rev-surface-main)' }">
+      <main class="flex-1 overflow-y-auto p-3 sm:p-4 lg:p-5" :style="{ backgroundColor: 'var(--rev-surface-main)' }">
         <router-view v-slot="{ Component, route }">
           <transition name="page-fade" mode="out-in">
             <component :is="Component" :key="route.path" />
