@@ -42,12 +42,22 @@ if (result.status === 0) {
       const latestJsonPath = path.join(nsisDir, 'latest.json')
       fs.writeFileSync(latestJsonPath, JSON.stringify(latestJson, null, 2), 'utf8')
       console.log(`\n==================================================`)
-      console.log(`✅ Файл latest.json успешно создан:`)
+      console.log(`✅ Файл latest.json успешно сформирован:`)
       console.log(`   ${latestJsonPath}`)
       console.log(`==================================================\n`)
+
+      // Автоматическая публикация на GitHub
+      const publishScript = path.resolve('scripts/publish.js')
+      if (fs.existsSync(publishScript)) {
+        spawnSync('node', ['--dns-result-order=ipv4first', publishScript], {
+          stdio: 'inherit',
+          shell: true,
+          env: process.env,
+        })
+      }
     }
   } catch (err) {
-    console.error('Ошибка создания latest.json:', err)
+    console.error('Ошибка создания latest.json или публикации:', err)
   }
 }
 
