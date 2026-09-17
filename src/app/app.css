@@ -1,0 +1,136 @@
+@import "tailwindcss" source(none);
+@source "../**/*.{vue,ts,js}";
+
+
+/*
+ * ═══════════════════════════════════════════
+ *  Ревизор — Global Styles (Tailwind v4)
+ * ═══════════════════════════════════════════
+ */
+
+/* ── Default theme variables (Midnight) ── */
+:root {
+  --rev-surface: #0a0a0f;
+  --rev-surface-elevated: #111119;
+  --rev-surface-sidebar: #111119;
+  --rev-surface-header: rgba(17, 17, 25, 0.5);
+  --rev-surface-main: #030712;
+  --rev-text-primary: #e5e7eb;
+  --rev-text-secondary: #9ca3af;
+  --rev-text-muted: #6b7280;
+  --rev-border: rgba(55, 65, 81, 0.6);
+  --rev-border-solid: #1f2937;
+  --rev-accent: #6366f1;
+  --rev-accent-hover: #818cf8;
+  --rev-accent-glow: rgba(99, 102, 241, 0.2);
+  --rev-accent-text: #a5b4fc;
+  --rev-scrollbar-thumb: #27272a;
+  --rev-scrollbar-thumb-hover: #3f3f46;
+  --rev-selection-bg: rgba(99, 102, 241, 0.3);
+  --rev-input-bg: #111827;
+  --rev-hover-bg: rgba(55, 65, 81, 0.5);
+}
+
+/* Custom theme overrides */
+@theme {
+  --color-surface: var(--rev-surface);
+  --color-surface-elevated: var(--rev-surface-elevated);
+  --color-accent: var(--rev-accent);
+  --color-accent-hover: var(--rev-accent-hover);
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Courier New', monospace;
+}
+
+/* Base resets */
+html, body, #app {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: var(--rev-surface);
+  color: var(--rev-text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--rev-scrollbar-thumb);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--rev-scrollbar-thumb-hover);
+}
+
+/* Selection */
+::selection {
+  background-color: var(--rev-selection-bg);
+  color: var(--rev-text-primary);
+}
+
+/* ═══════════════════════════════════════════
+ *  Discord theme — structural overrides
+ *  Applied via html.theme-discord class
+ * ═══════════════════════════════════════════ */
+
+/*
+ * Discord theme: override Tailwind gray scale for structural surfaces.
+ * We target only the top-level layout containers and key shared elements
+ * to keep the selector surface small and maintainable.
+ */
+
+/* ── Sidebar ── */
+html.theme-discord aside {
+  background-color: var(--rev-surface-sidebar) !important;
+  border-color: var(--rev-border) !important;
+}
+
+html.theme-discord aside .border-b {
+  border-color: var(--rev-border) !important;
+}
+
+/* ── Header ── */
+html.theme-discord header {
+  background-color: var(--rev-surface-header) !important;
+  border-color: var(--rev-border) !important;
+}
+
+/* ── Main content area ── */
+html.theme-discord main.bg-gray-950,
+html.theme-discord main {
+  background-color: var(--rev-surface-main) !important;
+}
+
+/* ── Modal overlays ── */
+html.theme-discord .bg-gray-950 {
+  background-color: var(--rev-surface) !important;
+}
+
+/* ── Input fields in discord theme ── */
+html.theme-discord input[type="text"],
+html.theme-discord input[type="date"],
+html.theme-discord input[type="number"],
+html.theme-discord input[type="search"],
+html.theme-discord textarea {
+  background-color: var(--rev-input-bg) !important;
+}
+
+/* ── Sidebar nav items hover ── */
+html.theme-discord aside nav .hover\:bg-gray-800\/50:hover,
+html.theme-discord aside nav .hover\:bg-gray-800\/30:hover,
+html.theme-discord aside nav .hover\:bg-gray-800\/40:hover,
+html.theme-discord aside nav .hover\:bg-gray-800\/20:hover {
+  background-color: var(--rev-hover-bg) !important;
+}
