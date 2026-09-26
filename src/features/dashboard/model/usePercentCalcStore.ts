@@ -6,12 +6,13 @@ import type { ThresholdItem, DecisionResult, PercentCalcInputs } from './types'
 const STORAGE_KEY = 'revizor_percent_calc_state'
 
 const DEFAULT_INPUTS: PercentCalcInputs = {
-  grossRevenue: 37264352,
+  grossRevenue: 0,
   vatRate: 16,
-  daysCount: 106,
-  writeOffAmount: 857326,
-  surplusAmount: 221539,
+  daysCount: 0,
+  writeOffAmount: 0,
+  surplusAmount: 0,
 }
+
 
 export const usePercentCalcStore = defineStore('dashboardPercentCalc', () => {
   // State
@@ -31,7 +32,10 @@ export const usePercentCalcStore = defineStore('dashboardPercentCalc', () => {
         if (typeof parsed.vatRate === 'number') vatRate.value = parsed.vatRate
         if (typeof parsed.daysCount === 'number') daysCount.value = parsed.daysCount
         if (typeof parsed.writeOffAmount === 'number') writeOffAmount.value = parsed.writeOffAmount
-        if (typeof parsed.surplusAmount === 'number') surplusAmount.value = parsed.surplusAmount
+        if (typeof parsed.surplusAmount === 'number') {
+          // If legacy sample value (221539) was stored, reset to standard 0
+          surplusAmount.value = parsed.surplusAmount === 221539 ? 0 : parsed.surplusAmount
+        }
       }
     } catch (e) {
       console.warn('[PercentCalc] Не удалось загрузить сохранённое состояние:', e)
@@ -189,13 +193,9 @@ export const usePercentCalcStore = defineStore('dashboardPercentCalc', () => {
     ]
   })
 
-  // Reset to default sample values
+  // Reset to default standard values
   function resetToDefaults() {
-    grossRevenue.value = DEFAULT_INPUTS.grossRevenue
-    vatRate.value = DEFAULT_INPUTS.vatRate
-    daysCount.value = DEFAULT_INPUTS.daysCount
-    writeOffAmount.value = DEFAULT_INPUTS.writeOffAmount
-    surplusAmount.value = DEFAULT_INPUTS.surplusAmount
+    clearAll()
   }
 
   // Clear to zero

@@ -98,15 +98,6 @@ function openEditDatesModal() {
   })
 }
 
-function copyRevisionUuid(id: string) {
-  if (navigator?.clipboard) {
-    navigator.clipboard.writeText(id)
-    eventBus.emit('app:toast', {
-      type: 'success',
-      message: `UUID скопирован: ${id}`,
-    })
-  }
-}
 
 
 watch(
@@ -243,18 +234,6 @@ async function initInventoryPage() {
             <span>Создана: {{ formatDateTime(store.activeRevision.createdAt) }}</span>
           </span>
 
-          <!-- Revision UUID Badge with copy -->
-          <button
-            v-if="store.activeRevision?.id"
-            type="button"
-            @click="copyRevisionUuid(store.activeRevision.id)"
-            class="flex items-center gap-1.5 rounded-md bg-gray-900/80 px-2.5 py-0.5 text-xs text-gray-400 ring-1 ring-gray-800 font-mono hover:text-indigo-300 hover:ring-indigo-500/40 transition-colors cursor-pointer group"
-            title="Нажмите, чтобы скопировать UUID ревизии"
-          >
-            <span class="text-gray-500 group-hover:text-indigo-400 transition-colors text-[10px]">🔑</span>
-            <span>UUID: {{ store.activeRevision.id }}</span>
-            <span class="text-[10px] opacity-0 group-hover:opacity-100 text-indigo-400 transition-opacity ml-0.5">📋</span>
-          </button>
         </div>
 
         <div class="flex items-center gap-2">

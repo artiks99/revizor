@@ -1,6 +1,6 @@
 {
   "name": "revizor",
-  "version": "1.0.5",
+  "version": "1.0.10",
   "private": true,
   "description": "Ревизор — система инвентаризации (Tauri v2 + Vue 3)",
   "type": "module",

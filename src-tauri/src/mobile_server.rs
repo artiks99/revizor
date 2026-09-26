@@ -2961,87 +2961,74 @@ fn get_mobile_html() -> String {
 
   <!-- Модальное окно подтверждения сканирования («Добавление») -->
   <div id="product-details-modal" style="display: none; position: fixed; inset: 0; z-index: 10020; background: #121212; overflow-y: auto; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
-    <!-- Шапка (зеленый бар) -->
-    <div style="background: #2e7d32; color: #fff; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 10; box-shadow: 0 2px 8px rgba(0,0,0,0.4);">
-      <div style="display: flex; align-items: center; gap: 12px;">
-        <button type="button" onclick="closeProductModal()" style="background: none; border: none; color: #fff; font-size: 22px; cursor: pointer; padding: 0 4px; display: flex; align-items: center;">←</button>
-        <span style="font-size: 18px; font-weight: 700; letter-spacing: 0.3px;">Добавление</span>
+    <!-- Компактная шапка -->
+    <div style="background: #2e7d32; color: #fff; padding: 8px 14px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 10; box-shadow: 0 1px 6px rgba(0,0,0,0.3);">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <button type="button" onclick="closeProductModal()" style="background: none; border: none; color: #fff; font-size: 20px; cursor: pointer; padding: 0 2px; display: flex; align-items: center;">←</button>
+        <span style="font-size: 16px; font-weight: 700; letter-spacing: 0.2px;">Добавление</span>
       </div>
-      <button type="button" onclick="closeProductModal()" style="background: none; border: none; color: rgba(255,255,255,0.85); font-size: 20px; cursor: pointer; padding: 4px;">✕</button>
+      <button type="button" onclick="closeProductModal()" style="background: none; border: none; color: rgba(255,255,255,0.85); font-size: 18px; cursor: pointer; padding: 2px;">✕</button>
     </div>
 
-    <div style="padding: 14px; max-width: 500px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px;">
+    <div style="padding: 10px 12px; max-width: 500px; margin: 0 auto; display: flex; flex-direction: column; gap: 8px;">
       <!-- Уведомление о Счете 299 -->
-      <div id="pdm-alert-299" style="display: none; background: rgba(88, 28, 135, 0.4); border: 1px solid #a855f7; border-radius: 10px; padding: 10px 14px; align-items: center; gap: 10px; color: #f3e8ff; font-size: 13px; font-weight: 600; box-shadow: 0 2px 10px rgba(168, 85, 247, 0.2);">
-        <span style="font-size: 16px;">🟣</span>
+      <div id="pdm-alert-299" style="display: none; background: rgba(88, 28, 135, 0.35); border: 1px solid #a855f7; border-radius: 8px; padding: 6px 10px; align-items: center; gap: 8px; color: #f3e8ff; font-size: 12px; font-weight: 600;">
+        <span style="font-size: 14px;">🟣</span>
         <span>Товар числится в списке Счета 299</span>
       </div>
 
-      <!-- Карточка 1: Данные о товаре -->
-      <div style="background: #1e1e1e; border: 1px solid #2d2d2d; border-radius: 12px; padding: 14px 16px;">
-        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
-          <div style="color: #94a3b8; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;">Данные о товаре</div>
-          <span id="pdm-badge-299" style="display: none; background: #581c87; color: #f3e8ff; border: 1px solid #a855f7; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 9999px; letter-spacing: 0.5px; box-shadow: 0 0 8px rgba(168, 85, 247, 0.35);">СЧЕТ 299</span>
-        </div>
-        <div style="font-size: 15px; color: #f8fafc; font-weight: 600;">
-          Локальный код: <span id="pdm-sku" style="color: #38bdf8; font-family: monospace;">—</span>
-        </div>
-        <div id="pdm-name" style="font-size: 14px; color: #cbd5e1; margin-top: 6px; line-height: 1.4; font-weight: 500;">—</div>
-        <div id="pdm-bc-row" style="font-size: 12px; color: #64748b; margin-top: 4px; font-family: monospace; display: none;">
-          Штрихкод: <span id="pdm-bc">—</span>
-        </div>
-      </div>
-
-      <!-- Карточка 2: Номер коробки -->
-      <div style="background: #1e1e1e; border: 1px solid #2d2d2d; border-radius: 12px; padding: 14px 16px;">
-        <div style="color: #94a3b8; font-size: 12px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">Номер коробки</div>
-        <input id="pdm-box-input" type="text" class="input-field" placeholder="Номер коробки..." style="width: 100%; background: #2a2a2a; border: 1px solid #3f3f46; border-radius: 8px; padding: 10px 14px; font-size: 16px; color: #fff;" onkeydown="if(event.key==='Enter') submitProductModal()" />
-      </div>
-
-      <!-- Карточка 3: Введите данные об остатках -->
-      <div style="background: #1e1e1e; border: 1px solid #2d2d2d; border-radius: 12px; padding: 14px 16px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-          <div style="font-weight: 700; font-size: 15px; color: #f8fafc;">Введите данные об остатках</div>
-          <span style="color: #94a3b8; font-size: 12px;">▲</span>
-        </div>
-        <div style="font-size: 14px; color: #e2e8f0; margin-bottom: 12px; line-height: 1.4;">
-          <div style="display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px;">
-            <span>Посчитанное ранее количество:</span>
-            <b id="pdm-debarkader-qty" style="color: #38bdf8; font-size: 16px;">0</b>
-            <span id="pdm-locations-inline" style="color: #94a3b8; font-size: 13px;"></span>
+      <!-- Карточка 1: Данные о товаре и Номер коробки -->
+      <div style="background: #1e1e1e; border: 1px solid #2d2d2d; border-radius: 10px; padding: 8px 12px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px; margin-bottom: 3px;">
+          <div style="font-size: 12px; font-weight: 600; color: #94a3b8;">
+            ЛК: <span id="pdm-sku" style="color: #38bdf8; font-family: monospace; font-size: 14px; font-weight: 700;">—</span>
           </div>
-          <div id="pdm-locations-chips" style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;"></div>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <div id="pdm-bc-row" style="font-size: 11px; color: #64748b; font-family: monospace; display: none;">
+              ШК: <span id="pdm-bc">—</span>
+            </div>
+            <span id="pdm-badge-299" style="display: none; background: #581c87; color: #f3e8ff; border: 1px solid #a855f7; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 9999px;">СЧЕТ 299</span>
+          </div>
         </div>
+        <div id="pdm-name" style="font-size: 14px; color: #f1f5f9; line-height: 1.25; font-weight: 600; margin-bottom: 6px; max-height: 38px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">—</div>
+        <div style="display: flex; align-items: center; gap: 6px; background: #262626; padding: 3px 8px; border-radius: 6px; border: 1px solid #333;">
+          <label for="pdm-box-input" style="color: #94a3b8; font-size: 11px; font-weight: 600; text-transform: uppercase; white-space: nowrap;">📦 Коробка:</label>
+          <input id="pdm-box-input" type="text" class="input-field" placeholder="Номер коробки..." style="flex: 1; background: #1a1a1a; border: 1px solid #3f3f46; border-radius: 4px; padding: 4px 8px; font-size: 13px; color: #fff;" onkeydown="if(event.key==='Enter') submitProductModal()" />
+        </div>
+      </div>
 
-        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; background: #262626; padding: 8px 12px; border-radius: 8px;">
-          <label for="pdm-qty-input" id="pdm-input-label" style="color: #fff; font-size: 15px; font-weight: 500;">Дебаркадер:</label>
+      <!-- Карточка 2: Остатки и Ввод количества -->
+      <div style="background: #1e1e1e; border: 1px solid #2d2d2d; border-radius: 10px; padding: 8px 12px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: #94a3b8; padding-bottom: 5px; border-bottom: 1px solid #262626; margin-bottom: 5px;">
+          <div>Остаток в маг.: <b id="pdm-sap-stock" style="color: #38bdf8; font-size: 13px;">0</b></div>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span>Кратность: <b id="pdm-sap-mult" style="color: #fbbf24; font-size: 13px;">1</b></span>
+            <button id="pdm-apply-mult-btn" type="button" onclick="applyPdmMultiplicity()" style="display: none; background: #334155; border: 1px solid #64748b; color: #f8fafc; font-size: 10px; padding: 2px 6px; border-radius: 4px; cursor: pointer;">× Кратность</button>
+          </div>
+        </div>
+        <div style="font-size: 12px; color: #94a3b8; margin-bottom: 6px;">
+          <div style="display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px;">
+            <span>Посчитано ранее:</span>
+            <b id="pdm-debarkader-qty" style="color: #38bdf8; font-size: 13px;">0</b>
+            <span id="pdm-locations-inline" style="color: #64748b; font-size: 11px;"></span>
+            <span id="pdm-hall-qty" style="display: none;">0</span>
+          </div>
+          <div id="pdm-locations-chips" style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px;"></div>
+        </div>
+        <div style="display: flex; align-items: center; justify-content: space-between; background: #262626; padding: 5px 10px; border-radius: 8px; border: 1px solid #3b3b3b;">
+          <label for="pdm-qty-input" id="pdm-input-label" style="color: #fff; font-size: 14px; font-weight: 600;">Дебаркадер:</label>
           <div style="display: flex; align-items: center; gap: 8px;">
-            <input id="pdm-qty-input" type="number" inputmode="numeric" min="1" class="input-field" style="width: 120px; background: #1a1a1a; border: 1px solid #52525b; border-radius: 6px; padding: 8px 10px; font-size: 17px; color: #fff; text-align: center; font-weight: 700;" oninput="onPdmQtyChange(this.value)" onkeydown="if(event.key==='Enter') submitProductModal()" />
+            <input id="pdm-qty-input" type="number" inputmode="numeric" min="1" class="input-field" style="width: 100px; background: #1a1a1a; border: 1px solid #22c55e; border-radius: 6px; padding: 5px 8px; font-size: 18px; color: #fff; text-align: center; font-weight: 700;" oninput="onPdmQtyChange(this.value)" onkeydown="if(event.key==='Enter') submitProductModal()" />
           </div>
-        </div>
-      </div>
-
-      <!-- Карточка 4: Остатки по данным SAP -->
-      <div style="background: #1e1e1e; border: 1px solid #2d2d2d; border-radius: 12px; padding: 14px 16px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-          <div style="font-weight: 700; font-size: 15px; color: #f8fafc;">Остатки по данным SAP</div>
-          <span style="color: #94a3b8; font-size: 12px;">▲</span>
-        </div>
-        <div style="font-size: 14px; color: #e2e8f0; margin-bottom: 8px;">
-          Остаток в магазине: <b id="pdm-sap-stock" style="color: #38bdf8;">0</b>
-        </div>
-        <div style="font-size: 14px; color: #e2e8f0; display: flex; align-items: center; justify-content: space-between;">
-          <span>Кратность коробки: <b id="pdm-sap-mult" style="color: #fbbf24;">1</b></span>
-          <button id="pdm-apply-mult-btn" type="button" onclick="applyPdmMultiplicity()" style="display: none; background: #334155; border: 1px solid #64748b; color: #f8fafc; font-size: 11px; padding: 4px 8px; border-radius: 6px; cursor: pointer;">Вставить кратность</button>
         </div>
       </div>
 
       <!-- Кнопки действий -->
-      <div style="display: flex; gap: 10px; margin-top: 8px; margin-bottom: 24px;">
-        <button id="pdm-submit-btn" type="button" onclick="submitProductModal()" style="flex: 1; padding: 14px; background: #2e7d32; border: 1px solid #4caf50; color: #fff; font-size: 16px; font-weight: 700; border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;">
+      <div style="display: flex; gap: 8px; margin-top: 2px;">
+        <button id="pdm-submit-btn" type="button" onclick="submitProductModal()" style="flex: 2; padding: 11px 14px; background: #2e7d32; border: 1px solid #4caf50; color: #fff; font-size: 15px; font-weight: 700; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; box-shadow: 0 2px 6px rgba(46, 125, 50, 0.4);">
           <span>✓ Добавить</span>
         </button>
-        <button type="button" onclick="closeProductModal()" style="padding: 14px 20px; background: #262626; border: 1px solid #3f3f46; color: #cbd5e1; font-size: 15px; border-radius: 10px; cursor: pointer;">
+        <button type="button" onclick="closeProductModal()" style="flex: 1; padding: 11px 12px; background: #262626; border: 1px solid #3f3f46; color: #cbd5e1; font-size: 14px; border-radius: 8px; cursor: pointer;">
           Отмена
         </button>
       </div>
@@ -3948,14 +3935,11 @@ fn get_mobile_html() -> String {
       }
       onPdmQtyChange(initialQty);
 
-      modal.style.display = 'block';
+      if (document.activeElement && typeof document.activeElement.blur === 'function') {
+        document.activeElement.blur();
+      }
 
-      setTimeout(() => {
-        if (qtyInput) {
-          qtyInput.focus();
-          qtyInput.select();
-        }
-      }, 100);
+      modal.style.display = 'block';
     }
 
     function onPdmQtyChange(val) {
@@ -3973,7 +3957,6 @@ fn get_mobile_html() -> String {
       if (qtyInput) {
         qtyInput.value = currentModalProduct.multiplicity;
         onPdmQtyChange(currentModalProduct.multiplicity);
-        qtyInput.focus();
       }
     }
 
@@ -4067,6 +4050,9 @@ fn get_mobile_html() -> String {
     }
 
     async function scanCurrentBarcode(providedBarcode, allowUnknown) {
+      if (document.activeElement && typeof document.activeElement.blur === 'function') {
+        document.activeElement.blur();
+      }
       hideSuggestions();
       if (!activeTask) return;
       if (currentTaskStatus === 'completed') {

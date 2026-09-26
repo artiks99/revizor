@@ -80,14 +80,6 @@ function triggerFileInput() {
           <span>Загрузить Excel</span>
         </button>
 
-        <button
-          type="button"
-          @click="store.resetToDefaults"
-          class="rounded-lg bg-gray-800/80 px-2.5 py-1.5 text-xs font-medium text-gray-300 ring-1 ring-gray-700/50 hover:bg-gray-800 hover:text-gray-100 transition-colors cursor-pointer"
-          title="Восстановить исходные значения из шаблона"
-        >
-          Пример
-        </button>
 
         <button
           type="button"
@@ -168,7 +160,7 @@ function triggerFileInput() {
             min="1"
             v-model.number="store.daysCount"
             class="w-full rounded-lg bg-gray-950/90 py-2 pl-3 pr-3 text-sm font-semibold text-gray-100 ring-1 ring-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/70"
-            placeholder="106"
+            placeholder="0"
           />
         </div>
         <div class="text-[11px] text-gray-500">
