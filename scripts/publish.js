@@ -127,6 +127,27 @@ async function main() {
   console.log(`🎉 Релиз ${tagName} полностью опубликован и готов к обновлению!`)
   console.log(`👉 https://github.com/${owner}/${repo}/releases/tag/${tagName}`)
   console.log(`==================================================\n`)
+
+  // 6. Деплой серверной части на VDS (опционально)
+  // При наличии на сервере /opt/revizor/deploy.sh выполняет автообновление
+  const vdsHost = process.env.VDS_HOST || '114.29.238.81'
+  if (vdsHost) {
+    const vdsUser = process.env.VDS_USER || 'deploy'
+    const vdsPort = process.env.VDS_PORT || '22'
+    const vdsPath = process.env.VDS_PATH || '/opt/revizor'
+
+    console.log(`\n☁️  Проверка деплоя на VDS (${vdsUser}@${vdsHost}:${vdsPort})...`)
+    try {
+      const sshCmd = [
+        `ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new`,
+        `-p ${vdsPort} ${vdsUser}@${vdsHost}`,
+        `"[ -f ${vdsPath}/deploy.sh ] && (cd ${vdsPath} && git pull origin main && ./deploy.sh) || echo 'ℹ️ deploy.sh еще не развернут на VDS (будет настроен на этапе 2).'"`
+      ].join(' ')
+      execSync(sshCmd, { stdio: 'inherit', timeout: 120_000 })
+    } catch (err) {
+      console.warn(`⚠️  Не удалось обновить VDS: ${err.message}`)
+    }
+  }
 }
 
 main().catch((err) => {
