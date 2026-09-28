@@ -1,0 +1,29 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: revizor-caddy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - ./caddy_data:/data
+      - ./caddy_config:/config
+    depends_on:
+      - server
+
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: revizor-server
+    restart: always
+    environment:
+      - PORT=4820
+      - DB_PATH=/opt/revizor/data/revision.db
+    volumes:
+      - ./data:/opt/revizor/data
+    ports:
+      - "127.0.0.1:4820:4820"

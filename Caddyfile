@@ -1,0 +1,4 @@
+revizzzor.duckdns.org {
+    encode gzip
+    reverse_proxy server:4820
+}
