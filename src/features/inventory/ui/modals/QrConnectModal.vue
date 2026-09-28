@@ -3,6 +3,7 @@ import { ref, computed, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useMobileSync, VDS_BASE_URL } from '../../model/useMobileSync'
 import { eventBus } from '@shared/lib/eventBus'
+import { useInventoryStore } from '../../model/useInventoryStore'
 import MobileSessionHistory from './components/MobileSessionHistory.vue'
 
 const props = defineProps<{
@@ -15,6 +16,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'close'): void
 }>()
+
+const inventoryStore = useInventoryStore()
 
 const {
   serverInfo,
@@ -31,9 +34,17 @@ const isLoading = ref(false)
 const copied = ref(false)
 const qrSvg = ref('')
 
+const effectiveRevisionId = computed(() => {
+  return props.revisionId || (inventoryStore as any).currentPartitionId || (inventoryStore as any).activeRevisionId || 'default'
+})
+
+const effectiveStoreNumber = computed(() => {
+  return props.storeNumber || inventoryStore.activeStoreNumber || ''
+})
+
 const connectUrl = computed(() => {
-  const rev = encodeURIComponent(props.revisionId)
-  const store = encodeURIComponent(props.storeNumber)
+  const rev = encodeURIComponent(effectiveRevisionId.value)
+  const store = encodeURIComponent(effectiveStoreNumber.value)
   return `${VDS_BASE_URL}/?store=${store}&rev=${rev}`
 })
 
@@ -48,11 +59,11 @@ async function updateQrCode() {
 }
 
 async function initSync() {
-  if (!props.isOpen || !props.revisionId) return
+  if (!props.isOpen) return
   isLoading.value = true
   try {
     await updateQrCode()
-    await startServer(props.revisionId, props.storeNumber, props.dirPath)
+    await startServer(effectiveRevisionId.value, effectiveStoreNumber.value, props.dirPath)
   } catch (err) {
     console.error('Failed to start VDS sync:', err)
   } finally {
@@ -62,10 +73,10 @@ async function initSync() {
 
 async function handleManualSync() {
   if (isSyncing.value) return
-  await uploadDataToVds(props.revisionId, props.storeNumber)
+  await uploadDataToVds(effectiveRevisionId.value, effectiveStoreNumber.value)
   eventBus.emit('app:toast', {
     type: 'success',
-    message: 'Каталог и задачи обновлены на VDS',
+    message: 'Каталог, локации и факт синхронизированы с VDS',
   })
 }
 
@@ -109,7 +120,7 @@ watch(
           </span>
           <div>
             <h3 class="text-base font-semibold text-white">Мобильный сканер (VDS)</h3>
-            <p class="text-xs text-gray-400">Магазин №{{ storeNumber }}</p>
+            <p class="text-xs text-gray-400">Магазин №{{ effectiveStoreNumber || '—' }}</p>
           </div>
         </div>
         <button

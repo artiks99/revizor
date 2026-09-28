@@ -83,7 +83,16 @@ export function useMobileSync() {
   async function uploadDataToVds(revisionId: string, storeNumber: string) {
     try {
       isSyncing.value = true
-      const tasks = (store as any).tasks?.map((t: any) => (typeof t === 'string' ? t : t.name)) || []
+      const tasks = store.distinctLocations || []
+      const items = store.items.map((i) => ({
+        id: i.id,
+        sku: i.sku,
+        name: i.name || '',
+        barcode: (i as any).barcode || '',
+        quantity: i.quantity || 1,
+        location: i.location || '',
+        box_number: i.boxNumber || '',
+      }))
       const catalog = store.catalogItems.map((c) => ({
         sku: c.sku,
         name: c.name,
@@ -95,21 +104,20 @@ export function useMobileSync() {
         quantity: s.quantity || 0,
       }))
 
-      if (tasks.length > 0 || catalog.length > 0 || stock.length > 0) {
-        const resp = await fetch(`${VDS_BASE_URL}/api/sync/upload`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            revision_id: revisionId,
-            store_number: storeNumber,
-            tasks,
-            catalog: catalog.slice(0, 20000),
-            stock: stock.slice(0, 20000),
-          }),
-        })
-        if (resp.ok) {
-          pushActivity(`Синхронизировано с VDS: ${tasks.length} зон, ${catalog.length} товаров`, 'connect')
-        }
+      const resp = await fetch(`${VDS_BASE_URL}/api/sync/upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          revision_id: revisionId,
+          store_number: storeNumber,
+          tasks,
+          items: items.slice(0, 50000),
+          catalog: catalog.slice(0, 20000),
+          stock: stock.slice(0, 20000),
+        }),
+      })
+      if (resp.ok) {
+        pushActivity(`Синхронизировано с VDS: ${tasks.length} зон, ${items.length} факт. поз., ${catalog.length} товаров`, 'connect')
       }
     } catch (err) {
       console.warn('[useMobileSync] uploadDataToVds error:', err)
@@ -121,7 +129,7 @@ export function useMobileSync() {
   async function pollEvents(revisionId: string, storeNumber: string) {
     if (!isVdsOnline.value) return
     try {
-      const url = `${VDS_BASE_URL}/api/sync/events?rev=${encodeURIComponent(revisionId)}&after=${lastEventId}`
+      const url = `${VDS_BASE_URL}/api/sync/events?rev=${encodeURIComponent(revisionId)}&store=${encodeURIComponent(storeNumber)}&after=${lastEventId}`
       const resp = await fetch(url, { signal: AbortSignal.timeout(3000) })
       if (!resp.ok) return
 
@@ -155,6 +163,7 @@ export function useMobileSync() {
             location: payload.location,
             boxNumber: payload.box_number,
           })
+          await store.loadItems()
         } else if (ev.event_type === 'item_updated') {
           const qty = payload.quantity
           const desc = `Кол-во: ${qty} шт.`
@@ -165,6 +174,7 @@ export function useMobileSync() {
           })
           if (payload.item_id) {
             await store.applyMobileItemUpdate(payload.item_id, qty)
+            await store.loadItems()
           }
         } else if (ev.event_type === 'box_updated') {
           const box = payload.box_number || '—'
@@ -176,6 +186,7 @@ export function useMobileSync() {
           })
           if (payload.item_id) {
             await store.applyMobileBoxUpdate(payload.item_id, payload.box_number)
+            await store.loadItems()
           }
         } else if (ev.event_type === 'task_created') {
           const desc = `Создана локация: "${payload.task}"`
