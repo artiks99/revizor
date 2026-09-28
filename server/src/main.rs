@@ -850,13 +850,14 @@ fn main() {
     let active_store = query_map.get("store").cloned().unwrap_or_default();
 
     let is_post = method == Method::Post;
+    println!(">>> HTTP {} {}", method, path);
 
     match (method, path) {
       (Method::Get, "/") | (Method::Get, "/index.html") | (Method::Get, "/mobile") => {
         let _ = request.respond(respond_html(MOBILE_HTML));
       }
 
-      (Method::Get, "/js/zxing.min.js") => {
+      (Method::Get, "/js/zxing.min.js") | (Method::Get, "/zxing.min.js") => {
         let _ = request.respond(respond_js(ZXING_JS));
       }
 
