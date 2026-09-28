@@ -239,33 +239,34 @@ fn get_tasks(db_path: &Path, _revision_id: &str) -> Result<Vec<TaskItemDto>, Str
     .prepare(
       "WITH all_tasks AS (
          SELECT 
-           name as loc_name, 
+           TRIM(name) as loc_name, 
            COALESCE(status, 'in_progress') as status, 
            COALESCE(created_at, '') as created_at, 
            COALESCE(updated_at, '') as updated_at 
          FROM mobile_tasks
-         UNION
+         UNION ALL
          SELECT 
-           DISTINCT location as loc_name, 
+           TRIM(location) as loc_name, 
            'completed' as status, 
            COALESCE(MIN(created_at), '') as created_at, 
            COALESCE(MAX(updated_at), '') as updated_at
          FROM inventory_items
          WHERE location IS NOT NULL AND TRIM(location) != '' 
-           AND location NOT IN (SELECT name FROM mobile_tasks)
-         GROUP BY location
+           AND TRIM(location) NOT IN (SELECT TRIM(name) FROM mobile_tasks)
+         GROUP BY TRIM(location)
        )
        SELECT 
          loc_name,
-         status,
-         created_at,
-         updated_at,
-         COALESCE((SELECT COUNT(DISTINCT sku) FROM inventory_items WHERE TRIM(location) = loc_name OR location = loc_name), 0) as items_count,
-         COALESCE((SELECT SUM(quantity) FROM inventory_items WHERE TRIM(location) = loc_name OR location = loc_name), 0) as total_qty
+         CASE WHEN MIN(CASE WHEN status = 'in_progress' THEN 0 ELSE 1 END) = 0 THEN 'in_progress' ELSE 'completed' END as status,
+         MIN(created_at) as created_at,
+         MAX(updated_at) as updated_at,
+         COALESCE((SELECT COUNT(DISTINCT sku) FROM inventory_items WHERE TRIM(location) = all_tasks.loc_name OR location = all_tasks.loc_name), 0) as items_count,
+         COALESCE((SELECT SUM(quantity) FROM inventory_items WHERE TRIM(location) = all_tasks.loc_name OR location = all_tasks.loc_name), 0) as total_qty
        FROM all_tasks
-       WHERE TRIM(loc_name) != ''
+       WHERE loc_name != ''
+       GROUP BY loc_name
        ORDER BY 
-         CASE WHEN status = 'in_progress' THEN 0 ELSE 1 END,
+         CASE WHEN MIN(CASE WHEN status = 'in_progress' THEN 0 ELSE 1 END) = 0 THEN 0 ELSE 1 END,
          updated_at DESC, 
          created_at DESC",
     )

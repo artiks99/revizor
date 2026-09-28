@@ -422,40 +422,51 @@ fn get_tasks(db_path: &Path, revision_id: &str) -> Result<Vec<TaskItemDto>, Stri
     .prepare(
       "WITH all_tasks AS (
          SELECT 
-           name as loc_name, 
+           TRIM(name) as loc_name, 
            COALESCE(status, 'in_progress') as status, 
            COALESCE(created_at, '') as created_at, 
            COALESCE(updated_at, '') as updated_at 
          FROM mobile_tasks
          WHERE (?1 = '' OR ?1 = 'default' OR revision_id = ?1)
-         UNION
+         UNION ALL
          SELECT 
-           DISTINCT location as loc_name, 
+           TRIM(location) as loc_name, 
            'completed' as status, 
-           COALESCE(created_at, '') as created_at, 
-           COALESCE(updated_at, '') as updated_at 
+           COALESCE(MIN(created_at), '') as created_at, 
+           COALESCE(MAX(updated_at), '') as updated_at 
          FROM inventory_items 
-         WHERE TRIM(location) != '' AND (?1 = '' OR ?1 = 'default' OR revision_id = ?1)
+         WHERE location IS NOT NULL AND TRIM(location) != '' 
+           AND (?1 = '' OR ?1 = 'default' OR revision_id = ?1)
+           AND TRIM(location) NOT IN (
+             SELECT TRIM(name) FROM mobile_tasks 
+             WHERE (?1 = '' OR ?1 = 'default' OR revision_id = ?1)
+           )
+         GROUP BY TRIM(location)
        )
        SELECT 
          loc_name,
-         status,
-         created_at,
-         updated_at,
+         CASE WHEN MIN(CASE WHEN status = 'in_progress' THEN 0 ELSE 1 END) = 0 THEN 'in_progress' ELSE 'completed' END as status,
+         MIN(created_at) as created_at,
+         MAX(updated_at) as updated_at,
          (
            SELECT COALESCE(COUNT(DISTINCT sku), 0)
            FROM inventory_items 
-           WHERE (TRIM(location) = loc_name OR location = loc_name)
+           WHERE (TRIM(location) = all_tasks.loc_name OR location = all_tasks.loc_name)
              AND (?1 = '' OR ?1 = 'default' OR revision_id = ?1)
          ) as items_count,
          (
            SELECT COALESCE(SUM(quantity), 0)
            FROM inventory_items 
-           WHERE (TRIM(location) = loc_name OR location = loc_name)
+           WHERE (TRIM(location) = all_tasks.loc_name OR location = all_tasks.loc_name)
              AND (?1 = '' OR ?1 = 'default' OR revision_id = ?1)
          ) as total_qty
        FROM all_tasks
-       ORDER BY updated_at DESC, created_at DESC",
+       WHERE loc_name != ''
+       GROUP BY loc_name
+       ORDER BY 
+         CASE WHEN MIN(CASE WHEN status = 'in_progress' THEN 0 ELSE 1 END) = 0 THEN 0 ELSE 1 END,
+         updated_at DESC, 
+         created_at DESC",
     )
     .map_err(|e| e.to_string())?;
 
