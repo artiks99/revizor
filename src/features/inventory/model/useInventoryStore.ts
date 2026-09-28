@@ -695,6 +695,27 @@ export const useInventoryStore = defineStore('inventory', () => {
     }
   }
 
+  async function applyMobileScan(item: { sku: string; name?: string; barcode?: string; addQty: number; location: string; boxNumber?: string }) {
+    if (!repo || !currentPartitionId.value) return
+    await repo.applyMobileScan(currentPartitionId.value, activeStoreNumber.value || '', item)
+    await loadItems()
+    await loadAllStoreData()
+  }
+
+  async function applyMobileItemUpdate(itemId: string, quantity: number) {
+    if (!repo || !currentPartitionId.value) return
+    await repo.applyMobileItemUpdate(currentPartitionId.value, itemId, quantity)
+    await loadItems()
+    await loadAllStoreData()
+  }
+
+  async function applyMobileBoxUpdate(itemId: string, boxNumber: string) {
+    if (!repo || !currentPartitionId.value) return
+    await repo.applyMobileBoxUpdate(currentPartitionId.value, itemId, boxNumber)
+    await loadItems()
+    await loadAllStoreData()
+  }
+
   async function importFactBatch(
     batch: { sku: string; name?: string; quantity?: number; unit?: string; location?: string }[],
     replaceAll = true,
@@ -1803,6 +1824,9 @@ export const useInventoryStore = defineStore('inventory', () => {
     loadAllStoreData,
     addItem,
     addItemsBatch,
+    applyMobileScan,
+    applyMobileItemUpdate,
+    applyMobileBoxUpdate,
     importFactBatch,
     updateFactQuantitiesBatch,
     updateFactLocationsBatch,

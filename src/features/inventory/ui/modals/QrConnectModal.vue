@@ -1,14 +1,9 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { useMobileSync } from '../../model/useMobileSync'
+import { useMobileSync, VDS_BASE_URL } from '../../model/useMobileSync'
 import { eventBus } from '@shared/lib/eventBus'
 import MobileSessionHistory from './components/MobileSessionHistory.vue'
-
-interface NetworkIp {
-  ip: string
-  label: string
-}
 
 const props = defineProps<{
   isOpen: boolean
@@ -21,31 +16,25 @@ const emit = defineEmits<{
   (e: 'close'): void
 }>()
 
-const { serverInfo, isServerRunning, recentActivities, startServer, clearActivities } = useMobileSync()
+const {
+  serverInfo,
+  isServerRunning,
+  isVdsOnline,
+  isSyncing,
+  recentActivities,
+  startServer,
+  uploadDataToVds,
+  clearActivities,
+} = useMobileSync()
 
 const isLoading = ref(false)
 const copied = ref(false)
 const qrSvg = ref('')
-const availableIps = ref<NetworkIp[]>([])
-const selectedIp = ref('')
-const customPort = ref(4820)
-
-const activeIp = computed(() => {
-  if (selectedIp.value) return selectedIp.value
-  if (serverInfo.value?.local_ip) return serverInfo.value.local_ip
-  return '127.0.0.1'
-})
 
 const connectUrl = computed(() => {
-  const ip = activeIp.value
-  const port = customPort.value
   const rev = encodeURIComponent(props.revisionId)
-  if (serverInfo.value?.url) {
-    const isHttps = serverInfo.value.url.startsWith('https:')
-    const protocol = isHttps ? 'https:' : 'http:'
-    return `${protocol}//${ip}:${port}/?rev=${rev}`
-  }
-  return `https://${ip}:${port}/?rev=${rev}`
+  const store = encodeURIComponent(props.storeNumber)
+  return `${VDS_BASE_URL}/?store=${store}&rev=${rev}`
 })
 
 async function updateQrCode() {
@@ -58,47 +47,27 @@ async function updateQrCode() {
   }
 }
 
-async function loadNetworkIps() {
-  try {
-    const list = await invoke<NetworkIp[]>('get_available_network_ips')
-    availableIps.value = list
-    if (list.length > 0 && !selectedIp.value) {
-      selectedIp.value = list[0].ip
-    }
-  } catch (err) {
-    console.warn('Failed to load network IPs:', err)
-  }
-}
-
-async function initServer() {
-  if (!props.isOpen || !props.revisionId || !props.dirPath) return
+async function initSync() {
+  if (!props.isOpen || !props.revisionId) return
   isLoading.value = true
   try {
-    await loadNetworkIps()
-    await startServer(props.revisionId, props.storeNumber, props.dirPath, customPort.value)
     await updateQrCode()
+    await startServer(props.revisionId, props.storeNumber, props.dirPath)
   } catch (err) {
-    console.error('Failed to start mobile server:', err)
+    console.error('Failed to start VDS sync:', err)
   } finally {
     isLoading.value = false
   }
 }
 
-watch(
-  () => props.isOpen,
-  (open) => {
-    if (open) {
-      initServer()
-    }
-  }
-)
-
-watch(
-  () => connectUrl.value,
-  () => {
-    updateQrCode()
-  }
-)
+async function handleManualSync() {
+  if (isSyncing.value) return
+  await uploadDataToVds(props.revisionId, props.storeNumber)
+  eventBus.emit('app:toast', {
+    type: 'success',
+    message: 'Каталог и задачи обновлены на VDS',
+  })
+}
 
 function copyUrl() {
   if (!connectUrl.value) return
@@ -112,6 +81,15 @@ function copyUrl() {
     copied.value = false
   }, 2000)
 }
+
+watch(
+  () => props.isOpen,
+  (open) => {
+    if (open) {
+      initSync()
+    }
+  }
+)
 </script>
 
 <template>
@@ -127,10 +105,10 @@ function copyUrl() {
       <div class="flex items-center justify-between border-b border-gray-800/80 pb-4">
         <div class="flex items-center gap-2.5">
           <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-500/10 text-lg text-indigo-400 ring-1 ring-indigo-500/20">
-            📱
+            🌐
           </span>
           <div>
-            <h3 class="text-base font-semibold text-white">Сканер с телефона</h3>
+            <h3 class="text-base font-semibold text-white">Мобильный сканер (VDS)</h3>
             <p class="text-xs text-gray-400">Магазин №{{ storeNumber }}</p>
           </div>
         </div>
@@ -144,27 +122,25 @@ function copyUrl() {
 
       <!-- Content -->
       <div class="mt-4 space-y-4">
-        <!-- Wi-Fi info banner -->
-        <div class="flex items-start gap-2.5 rounded-xl border border-indigo-500/20 bg-indigo-950/30 p-2.5 text-xs text-indigo-300">
-          <span class="text-base">📶</span>
-          <p>
-            Убедитесь, что <strong>телефон и компьютер</strong> подключены к одной сети Wi-Fi.
-          </p>
-        </div>
-
-        <!-- IP Address Selector (if multiple adapters) -->
-        <div v-if="availableIps.length > 1" class="space-y-1">
-          <label class="text-[11px] font-medium text-gray-400 uppercase tracking-wider">
-            Сетевой адрес компьютера:
-          </label>
-          <select
-            v-model="selectedIp"
-            class="w-full rounded-lg border border-gray-800 bg-gray-900 px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500"
+        <!-- VDS Cloud status banner -->
+        <div class="flex items-center justify-between rounded-xl border border-gray-800 bg-gray-900/80 px-3 py-2 text-xs">
+          <div class="flex items-center gap-2">
+            <span
+              class="h-2.5 w-2.5 rounded-full"
+              :class="isVdsOnline ? 'bg-emerald-400 shadow-sm shadow-emerald-400/50 animate-pulse' : 'bg-rose-500'"
+            />
+            <span class="font-medium text-gray-200">
+              {{ isVdsOnline ? 'VDS Сервер онлайн' : 'Проверка связи с сервером...' }}
+            </span>
+          </div>
+          <button
+            @click="handleManualSync"
+            :disabled="isSyncing"
+            class="flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-medium text-indigo-400 hover:bg-indigo-950/50 transition-colors cursor-pointer disabled:opacity-50"
+            title="Обновить каталог товаров и задач на VDS"
           >
-            <option v-for="net in availableIps" :key="net.ip" :value="net.ip">
-              {{ net.label }}
-            </option>
-          </select>
+            <span>{{ isSyncing ? '⏳ Синхронизация...' : '🔄 Обновить каталог' }}</span>
+          </button>
         </div>
 
         <!-- QR Code Container -->
@@ -204,18 +180,18 @@ function copyUrl() {
           </button>
         </div>
 
-        <!-- Camera info hint -->
-        <div class="rounded-xl border border-indigo-500/30 bg-indigo-950/20 p-2.5 text-[11px] text-gray-300 space-y-1">
-          <div class="flex items-center gap-1.5 font-medium text-indigo-300">
-            <span>🔒</span>
-            <span>Потоковый видео-сканер (без фото):</span>
+        <!-- Cloud Explanation hint -->
+        <div class="rounded-xl border border-emerald-500/20 bg-emerald-950/20 p-2.5 text-[11px] text-gray-300 space-y-1">
+          <div class="flex items-center gap-1.5 font-medium text-emerald-400">
+            <span>🚀</span>
+            <span>Работает из любой точки города:</span>
           </div>
           <p class="leading-relaxed text-[11px] text-gray-400">
-            Для работы камеры в качестве реального сканера используется защищенный <strong>HTTPS</strong>. При открытии на телефоне нажмите <strong>«Дополнительно» ➔ «Перейти на сайт»</strong>.
+            Сканируйте штрихкоды с телефона через мобильный интернет <strong>4G/LTE</strong> или любой <strong>Wi-Fi</strong>. Потоковый сканер камеры открывается сразу без предупреждений сертификата.
           </p>
         </div>
 
-        <!-- Live Activity feed / Full Session History -->
+        <!-- Live Activity feed -->
         <MobileSessionHistory
           :activities="recentActivities"
           :is-server-running="isServerRunning"

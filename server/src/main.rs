@@ -129,11 +129,189 @@ fn ensure_mobile_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
     [],
   )?;
 
+  conn.execute(
+    "CREATE TABLE IF NOT EXISTS sync_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      revision_id TEXT NOT NULL DEFAULT '',
+      store_number TEXT NOT NULL DEFAULT '',
+      event_type TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+    )",
+    [],
+  )?;
+
+  conn.execute(
+    "CREATE TABLE IF NOT EXISTS store_catalog (
+      id TEXT PRIMARY KEY,
+      revision_id TEXT NOT NULL DEFAULT '',
+      store_number TEXT NOT NULL DEFAULT '',
+      sku TEXT NOT NULL,
+      name TEXT NOT NULL,
+      barcode TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+    )",
+    [],
+  )?;
+
+  conn.execute(
+    "CREATE TABLE IF NOT EXISTS store_stock (
+      id TEXT PRIMARY KEY,
+      revision_id TEXT NOT NULL DEFAULT '',
+      store_number TEXT NOT NULL DEFAULT '',
+      sku TEXT NOT NULL,
+      name TEXT NOT NULL,
+      quantity REAL NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+    )",
+    [],
+  )?;
+
   let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_inv_loc ON inventory_items(location)", []);
   let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_inv_sku ON inventory_items(sku)", []);
   let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_mti_task ON mobile_task_items(task_name)", []);
+  let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_sync_events ON sync_events(revision_id, id)", []);
+  let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_cat_sku ON store_catalog(sku)", []);
+  let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_cat_bc ON store_catalog(barcode)", []);
+  let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_stock_sku ON store_stock(sku)", []);
 
   Ok(())
+}
+
+fn record_sync_event(conn: &Connection, revision_id: &str, store_number: &str, event_type: &str, payload: &serde_json::Value) {
+  let json_str = payload.to_string();
+  let _ = conn.execute(
+    "INSERT INTO sync_events (revision_id, store_number, event_type, payload) VALUES (?1, ?2, ?3, ?4)",
+    params![revision_id, store_number, event_type, json_str],
+  );
+}
+
+#[derive(Serialize)]
+pub struct SyncEventDto {
+  pub id: i64,
+  pub revision_id: String,
+  pub store_number: String,
+  pub event_type: String,
+  pub payload: serde_json::Value,
+  pub created_at: String,
+}
+
+fn get_sync_events(db_path: &Path, revision_id: &str, after_id: i64) -> Result<(Vec<SyncEventDto>, i64), String> {
+  let conn = open_db(db_path)?;
+  let _ = ensure_mobile_tables(&conn);
+
+  let mut stmt = conn
+    .prepare(
+      "SELECT id, revision_id, store_number, event_type, payload, created_at 
+       FROM sync_events 
+       WHERE (revision_id = ?1 OR revision_id = '' OR ?1 = '' OR ?1 = 'default') AND id > ?2 
+       ORDER BY id ASC LIMIT 500"
+    )
+    .map_err(|e| e.to_string())?;
+
+  let mut max_id = after_id;
+  let rows = stmt
+    .query_map(params![revision_id, after_id], |r| {
+      let id: i64 = r.get(0)?;
+      let rev: String = r.get(1)?;
+      let store: String = r.get(2)?;
+      let etype: String = r.get(3)?;
+      let payload_raw: String = r.get(4)?;
+      let created: String = r.get(5)?;
+      let parsed_payload: serde_json::Value = serde_json::from_str(&payload_raw).unwrap_or(json!({}));
+      Ok(SyncEventDto {
+        id,
+        revision_id: rev,
+        store_number: store,
+        event_type: etype,
+        payload: parsed_payload,
+        created_at: created,
+      })
+    })
+    .map_err(|e| e.to_string())?;
+
+  let mut events = Vec::new();
+  for r in rows.flatten() {
+    if r.id > max_id {
+      max_id = r.id;
+    }
+    events.push(r);
+  }
+
+  Ok((events, max_id))
+}
+
+fn sync_upload_data(
+  db_path: &Path,
+  revision_id: &str,
+  store_number: &str,
+  tasks: Vec<String>,
+  catalog: Vec<serde_json::Value>,
+  stock: Vec<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+  let mut conn = open_db(db_path)?;
+  let _ = ensure_mobile_tables(&conn);
+
+  let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+  let mut inserted_tasks = 0;
+  for t in &tasks {
+    let clean = t.trim();
+    if !clean.is_empty() {
+      let _ = tx.execute(
+        "INSERT INTO mobile_tasks (id, revision_id, name, status, created_at, updated_at)
+         VALUES (?1, ?2, ?1, 'in_progress', datetime('now', 'localtime'), datetime('now', 'localtime'))
+         ON CONFLICT(name) DO NOTHING",
+        params![clean, revision_id],
+      );
+      inserted_tasks += 1;
+    }
+  }
+
+  let mut inserted_cat = 0;
+  for item in catalog {
+    let sku = item.get("sku").and_then(|v| v.as_str()).unwrap_or("").trim();
+    let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").trim();
+    let barcode = item.get("barcode").and_then(|v| v.as_str()).unwrap_or("").trim();
+    if !sku.is_empty() {
+      let cat_id = format!("{}_{}", store_number, sku);
+      let _ = tx.execute(
+        "INSERT INTO store_catalog (id, revision_id, store_number, sku, name, barcode, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now', 'localtime'), datetime('now', 'localtime'))
+         ON CONFLICT(id) DO UPDATE SET name = ?5, barcode = ?6, updated_at = datetime('now', 'localtime')",
+        params![cat_id, revision_id, store_number, sku, name, barcode],
+      );
+      inserted_cat += 1;
+    }
+  }
+
+  let mut inserted_stock = 0;
+  for item in stock {
+    let sku = item.get("sku").and_then(|v| v.as_str()).unwrap_or("").trim();
+    let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").trim();
+    let qty = item.get("quantity").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    if !sku.is_empty() {
+      let stock_id = format!("{}_{}", store_number, sku);
+      let _ = tx.execute(
+        "INSERT INTO store_stock (id, revision_id, store_number, sku, name, quantity, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now', 'localtime'), datetime('now', 'localtime'))
+         ON CONFLICT(id) DO UPDATE SET quantity = ?6, updated_at = datetime('now', 'localtime')",
+        params![stock_id, revision_id, store_number, sku, name, qty],
+      );
+      inserted_stock += 1;
+    }
+  }
+
+  tx.commit().map_err(|e| e.to_string())?;
+
+  Ok(json!({
+    "success": true,
+    "tasks_processed": inserted_tasks,
+    "catalog_processed": inserted_cat,
+    "stock_processed": inserted_stock,
+  }))
 }
 
 fn flush_draft_items(conn: &Connection, task_name: &str, revision_id: &str, store_number: &str) -> Result<(), String> {
@@ -272,6 +450,18 @@ fn create_task(db_path: &Path, revision_id: &str, name: &str) -> Result<TaskItem
     params![clean_name, revision_id, clean_name],
   ).map_err(|e| format!("Ошибка создания задачи: {}", e))?;
 
+  record_sync_event(
+    &conn,
+    revision_id,
+    "",
+    "task_created",
+    &json!({
+      "type": "task_created",
+      "task": clean_name,
+      "revision_id": revision_id,
+    }),
+  );
+
   Ok(TaskItemDto {
     id: clean_name.to_string(),
     name: clean_name.to_string(),
@@ -283,7 +473,7 @@ fn create_task(db_path: &Path, revision_id: &str, name: &str) -> Result<TaskItem
   })
 }
 
-fn delete_task(db_path: &Path, name: &str) -> Result<(), String> {
+fn delete_task(db_path: &Path, revision_id: &str, name: &str) -> Result<(), String> {
   let conn = open_db(db_path)?;
   let _ = ensure_mobile_tables(&conn);
   let clean_name = name.trim();
@@ -293,6 +483,19 @@ fn delete_task(db_path: &Path, name: &str) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
   conn.execute("DELETE FROM inventory_items WHERE TRIM(location) = ?1 OR location = ?1", params![clean_name])
     .map_err(|e| e.to_string())?;
+
+  record_sync_event(
+    &conn,
+    revision_id,
+    "",
+    "task_deleted",
+    &json!({
+      "type": "task_deleted",
+      "task": clean_name,
+      "revision_id": revision_id,
+    }),
+  );
+
   Ok(())
 }
 
@@ -654,6 +857,26 @@ fn scan_barcode(
     }
   };
 
+  record_sync_event(
+    &conn,
+    revision_id,
+    store_number,
+    "item_scanned",
+    &json!({
+      "type": "item_scanned",
+      "barcode": found_bc,
+      "sku": found_sku,
+      "name": found_name,
+      "location": clean_loc,
+      "add_qty": qty,
+      "quantity": new_total,
+      "box_number": final_box,
+      "item_id": item_id,
+      "revision_id": revision_id,
+      "store_number": store_number,
+    }),
+  );
+
   Ok(ScannedProductDto {
     id: item_id,
     sku: found_sku,
@@ -665,7 +888,7 @@ fn scan_barcode(
   })
 }
 
-fn update_item_box(db_path: &Path, item_id: &str, box_number: &str, location: &str) -> Result<(), String> {
+fn update_item_box(db_path: &Path, revision_id: &str, item_id: &str, box_number: &str, location: &str) -> Result<(), String> {
   let conn = open_db(db_path)?;
   let clean_box = box_number.trim();
   conn.execute("UPDATE inventory_items SET box_number = ?1, updated_at = datetime('now', 'localtime') WHERE id = ?2", params![clean_box, item_id])
@@ -674,10 +897,25 @@ fn update_item_box(db_path: &Path, item_id: &str, box_number: &str, location: &s
   if !clean_loc.is_empty() {
     let _ = conn.execute("UPDATE mobile_tasks SET updated_at = datetime('now', 'localtime') WHERE name = ?1", params![clean_loc]);
   }
+
+  record_sync_event(
+    &conn,
+    revision_id,
+    "",
+    "box_updated",
+    &json!({
+      "type": "box_updated",
+      "item_id": item_id,
+      "box_number": clean_box,
+      "location": clean_loc,
+      "revision_id": revision_id,
+    }),
+  );
+
   Ok(())
 }
 
-fn update_item_qty(db_path: &Path, item_id: &str, new_qty: i64, location: &str) -> Result<(), String> {
+fn update_item_qty(db_path: &Path, revision_id: &str, item_id: &str, new_qty: i64, location: &str) -> Result<(), String> {
   let conn = open_db(db_path)?;
   if new_qty <= 0 {
     conn.execute("DELETE FROM inventory_items WHERE id = ?1", params![item_id])
@@ -690,6 +928,21 @@ fn update_item_qty(db_path: &Path, item_id: &str, new_qty: i64, location: &str) 
   if !clean_loc.is_empty() {
     let _ = conn.execute("UPDATE mobile_tasks SET updated_at = datetime('now', 'localtime') WHERE name = ?1", params![clean_loc]);
   }
+
+  record_sync_event(
+    &conn,
+    revision_id,
+    "",
+    "item_updated",
+    &json!({
+      "type": "item_updated",
+      "item_id": item_id,
+      "quantity": new_qty,
+      "location": clean_loc,
+      "revision_id": revision_id,
+    }),
+  );
+
   Ok(())
 }
 
@@ -710,6 +963,20 @@ fn complete_task(db_path: &Path, revision_id: &str, store_number: &str, name: &s
      ON CONFLICT(name) DO UPDATE SET status = 'completed', updated_at = datetime('now', 'localtime'), completed_at = datetime('now', 'localtime')",
     params![clean_name, revision_id, clean_name],
   ).map_err(|e| e.to_string())?;
+
+  record_sync_event(
+    &conn,
+    revision_id,
+    store_number,
+    "task_completed",
+    &json!({
+      "type": "task_completed",
+      "task": clean_name,
+      "items_count": items_count,
+      "total_qty": total_qty,
+      "revision_id": revision_id,
+    }),
+  );
 
   Ok(TaskCompleteResultDto {
     success: true,
@@ -933,7 +1200,7 @@ fn main() {
         let val: serde_json::Value = serde_json::from_str(&body).unwrap_or(json!({}));
         let task_name = val.get("name").and_then(|v| v.as_str()).unwrap_or("");
 
-        match delete_task(&db_path, task_name) {
+        match delete_task(&db_path, &active_rev, task_name) {
           Ok(_) => {
             println!("🗑️  Удалена задача: {}", task_name);
             let _ = request.respond(respond_json(&json!({ "success": true }), 200));
@@ -1014,7 +1281,7 @@ fn main() {
         let location = val.get("location").and_then(|v| v.as_str()).unwrap_or("");
 
         if let Some(box_num) = val.get("box_number").and_then(|v| v.as_str()) {
-          match update_item_box(&db_path, item_id, box_num, location) {
+          match update_item_box(&db_path, &active_rev, item_id, box_num, location) {
             Ok(_) => {
               let _ = request.respond(respond_json(&json!({ "success": true }), 200));
             }
@@ -1024,13 +1291,51 @@ fn main() {
           }
         } else {
           let new_qty = val.get("quantity").and_then(|v| v.as_i64()).unwrap_or(0);
-          match update_item_qty(&db_path, item_id, new_qty, location) {
+          match update_item_qty(&db_path, &active_rev, item_id, new_qty, location) {
             Ok(_) => {
               let _ = request.respond(respond_json(&json!({ "success": true }), 200));
             }
             Err(e) => {
               let _ = request.respond(respond_json(&json!({ "success": false, "error": e }), 400));
             }
+          }
+        }
+      }
+
+      (Method::Get, "/api/sync/events") => {
+        let after_id = query_map.get("after").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+        match get_sync_events(&db_path, &active_rev, after_id) {
+          Ok((events, latest_id)) => {
+            let _ = request.respond(respond_json(&json!({
+              "success": true,
+              "events": events,
+              "latest_id": latest_id
+            }), 200));
+          }
+          Err(e) => {
+            let _ = request.respond(respond_json(&json!({ "success": false, "error": e }), 500));
+          }
+        }
+      }
+
+      (Method::Post, "/api/sync/upload") => {
+        let mut body = String::new();
+        let _ = request.as_reader().read_to_string(&mut body);
+        let val: serde_json::Value = serde_json::from_str(&body).unwrap_or(json!({}));
+        let rev = val.get("revision_id").and_then(|v| v.as_str()).unwrap_or(&active_rev);
+        let store = val.get("store_number").and_then(|v| v.as_str()).unwrap_or(&active_store);
+        let tasks = val.get("tasks").and_then(|v| v.as_array())
+          .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+          .unwrap_or_default();
+        let catalog = val.get("catalog").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let stock = val.get("stock").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+
+        match sync_upload_data(&db_path, rev, store, tasks, catalog, stock) {
+          Ok(res) => {
+            let _ = request.respond(respond_json(&res, 200));
+          }
+          Err(e) => {
+            let _ = request.respond(respond_json(&json!({ "success": false, "error": e }), 400));
           }
         }
       }
