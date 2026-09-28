@@ -169,6 +169,17 @@ fn ensure_mobile_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
     [],
   )?;
 
+  conn.execute(
+    "CREATE TABLE IF NOT EXISTS processed_client_scans (
+      client_scan_id TEXT PRIMARY KEY,
+      revision_id TEXT NOT NULL DEFAULT '',
+      store_number TEXT NOT NULL DEFAULT '',
+      item_id TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+    )",
+    [],
+  )?;
+
   let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_inv_loc ON inventory_items(location)", []);
   let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_inv_sku ON inventory_items(sku)", []);
   let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_mti_task ON mobile_task_items(task_name)", []);
@@ -176,6 +187,7 @@ fn ensure_mobile_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
   let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_cat_sku ON store_catalog(sku)", []);
   let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_cat_bc ON store_catalog(barcode)", []);
   let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_stock_sku ON store_stock(sku)", []);
+  let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_proc_scans ON processed_client_scans(client_scan_id)", []);
 
   Ok(())
 }
@@ -742,6 +754,7 @@ fn scan_barcode(
   add_qty: i64,
   box_number: &str,
   allow_unknown: bool,
+  client_scan_id: &str,
 ) -> Result<ScannedProductDto, String> {
   let conn = open_db(db_path)?;
   let _ = ensure_mobile_tables(&conn);
@@ -756,6 +769,29 @@ fn scan_barcode(
   }
   if clean_bc.is_empty() {
     return Err("Пустой штрихкод".to_string());
+  }
+
+  // Защита от дублей: если этот скан уже был сохранен ранее по client_scan_id
+  if !client_scan_id.is_empty() {
+    let already_recorded: Result<(String, String, String, String, i64, String), _> = conn.query_row(
+      "SELECT i.id, i.sku, COALESCE(i.sku, ''), i.name, i.quantity, COALESCE(i.box_number, '')
+       FROM processed_client_scans p
+       JOIN inventory_items i ON i.id = p.item_id
+       WHERE p.client_scan_id = ?1 LIMIT 1",
+      params![client_scan_id],
+      |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+    );
+    if let Ok((id, s, b, n, q, box_num)) = already_recorded {
+      return Ok(ScannedProductDto {
+        id,
+        sku: s,
+        barcode: b,
+        name: n,
+        quantity: q,
+        updated_at: "уже учтено".to_string(),
+        box_number: box_num,
+      });
+    }
   }
 
   let task_status: String = conn.query_row(
@@ -857,6 +893,14 @@ fn scan_barcode(
     }
   };
 
+  if !client_scan_id.is_empty() {
+    let _ = conn.execute(
+      "INSERT INTO processed_client_scans (client_scan_id, revision_id, store_number, item_id)
+       VALUES (?1, ?2, ?3, ?4) ON CONFLICT(client_scan_id) DO NOTHING",
+      params![client_scan_id, revision_id, store_number, item_id],
+    );
+  }
+
   record_sync_event(
     &conn,
     revision_id,
@@ -886,6 +930,38 @@ fn scan_barcode(
     updated_at: "только что".to_string(),
     box_number: final_box,
   })
+}
+
+fn scan_batch(
+  db_path: &Path,
+  revision_id: &str,
+  store_number: &str,
+  scans: Vec<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+  let mut results = Vec::new();
+  for s in scans {
+    let location = s.get("location").and_then(|v| v.as_str()).unwrap_or("");
+    let barcode = s.get("barcode").and_then(|v| v.as_str()).unwrap_or("");
+    let qty = s.get("quantity").and_then(|v| v.as_i64()).unwrap_or(1);
+    let box_number = s.get("box_number").and_then(|v| v.as_str()).unwrap_or("");
+    let allow_unknown = s.get("allow_unknown").and_then(|v| v.as_bool()).unwrap_or(true);
+    let client_scan_id = s.get("client_scan_id").and_then(|v| v.as_str()).unwrap_or("");
+
+    match scan_barcode(db_path, revision_id, store_number, location, barcode, qty, box_number, allow_unknown, client_scan_id) {
+      Ok(res) => {
+        results.push(json!({ "success": true, "client_scan_id": client_scan_id, "item": res }));
+      }
+      Err(err) => {
+        results.push(json!({ "success": false, "client_scan_id": client_scan_id, "error": err }));
+      }
+    }
+  }
+
+  Ok(json!({
+    "success": true,
+    "processed": results.len(),
+    "results": results
+  }))
 }
 
 fn update_item_box(db_path: &Path, revision_id: &str, item_id: &str, box_number: &str, location: &str) -> Result<(), String> {
@@ -1128,6 +1204,19 @@ fn main() {
         let _ = request.respond(respond_js(ZXING_JS));
       }
 
+      (Method::Get, "/manifest.json") => {
+        let manifest = json!({
+          "name": "Ревизор — Мобильный сканер",
+          "short_name": "Ревизор",
+          "start_url": "/",
+          "display": "standalone",
+          "background_color": "#090d16",
+          "theme_color": "#090d16",
+          "description": "Мобильный терминал сбора данных для инвентаризации с гарантией сохранения сканов"
+        });
+        let _ = request.respond(respond_json(&manifest, 200));
+      }
+
       (Method::Get, "/api/status") => {
         let res = json!({
           "status": "ok",
@@ -1239,11 +1328,28 @@ fn main() {
         let qty = val.get("quantity").and_then(|v| v.as_i64()).unwrap_or(1);
         let box_number = val.get("box_number").and_then(|v| v.as_str()).unwrap_or("");
         let allow_unknown = val.get("allow_unknown").and_then(|v| v.as_bool()).unwrap_or(false);
+        let client_scan_id = val.get("client_scan_id").and_then(|v| v.as_str()).unwrap_or("");
 
-        match scan_barcode(&db_path, &active_rev, &active_store, location, barcode, qty, box_number, allow_unknown) {
+        match scan_barcode(&db_path, &active_rev, &active_store, location, barcode, qty, box_number, allow_unknown, client_scan_id) {
           Ok(item) => {
             println!("🔍 Отсканирован: {} ({} шт.) → {}", item.name, qty, location);
             let _ = request.respond(respond_json(&json!({ "success": true, "item": item }), 200));
+          }
+          Err(e) => {
+            let _ = request.respond(respond_json(&json!({ "success": false, "error": e }), 400));
+          }
+        }
+      }
+
+      (Method::Post, "/api/scan/batch") => {
+        let mut body = String::new();
+        let _ = request.as_reader().read_to_string(&mut body);
+        let val: serde_json::Value = serde_json::from_str(&body).unwrap_or(json!({}));
+        let scans = val.get("scans").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+
+        match scan_batch(&db_path, &active_rev, &active_store, scans) {
+          Ok(res) => {
+            let _ = request.respond(respond_json(&res, 200));
           }
           Err(e) => {
             let _ = request.respond(respond_json(&json!({ "success": false, "error": e }), 400));

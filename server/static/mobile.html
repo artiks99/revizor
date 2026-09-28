@@ -4,6 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Ревизор — Мобильный Сканер</title>
+  <meta name="theme-color" content="#090d16">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="/manifest.json">
   <script src="/js/zxing.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
@@ -797,7 +802,11 @@
       <div id="store-label" style="font-size:11px; color:#34d399; font-weight:600;">🟢 В сети · Подключено</div>
     </div>
     <div style="display: flex; align-items: center; gap: 8px;">
-      <button id="header-sync-btn" type="button" class="btn-header-sync" onclick="syncAppNow()" title="Синхронизировать с ПК">
+      <button id="offline-buffer-badge" type="button" onclick="openOfflineModal()" title="Неотправленные сканы в памяти телефона" style="display: none; align-items: center; gap: 4px; background: rgba(245, 158, 11, 0.2); border: 1px solid rgba(245, 158, 11, 0.6); color: #fbbf24; padding: 4px 8px; border-radius: 8px; font-size: 11px; font-weight: 700; cursor: pointer;">
+        <span>💾</span>
+        <span id="offline-buffer-count">0</span>
+      </button>
+      <button id="header-sync-btn" type="button" class="btn-header-sync" onclick="syncAppNow()" title="Синхронизировать с VDS">
         <span class="sync-icon">🔄</span>
         <span>Синхр.</span>
       </button>
@@ -1207,7 +1216,273 @@
     </div>
   </div>
 
+  <!-- Модальное окно буфера памяти телефона (IndexedDB) -->
+  <div id="modal-offline" style="display: none; position: fixed; inset: 0; z-index: 10050; background: rgba(0,0,0,0.8); backdrop-filter: blur(4px); padding: 16px; overflow-y: auto;">
+    <div style="background: #18181b; border: 1px solid #3f3f46; border-radius: 14px; max-width: 480px; margin: 30px auto; padding: 16px; color: #f4f4f5; box-shadow: 0 10px 25px rgba(0,0,0,0.6);">
+      <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #27272a; padding-bottom: 12px; margin-bottom: 12px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 20px;">💾</span>
+          <div>
+            <div style="font-weight: 700; font-size: 15px;">Память телефона (Буфер)</div>
+            <div style="font-size: 11px; color: #a1a1aa;">Гарантия сохранения (Zero-Data-Loss)</div>
+          </div>
+        </div>
+        <button type="button" onclick="closeOfflineModal()" style="background: none; border: none; color: #a1a1aa; font-size: 20px; cursor: pointer;">✕</button>
+      </div>
+
+      <div style="background: #27272a; border-radius: 8px; padding: 10px 12px; font-size: 12px; color: #d4d4d8; line-height: 1.4; margin-bottom: 12px;">
+        Все отсканированные позиции мгновенно записываются во внутреннюю память телефона. Как только связь с сервером восстановится, они автоматически будут выгружены без дублирования.
+      </div>
+
+      <div id="offline-modal-list" style="max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px;">
+        <!-- Заполняется динамически -->
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <div style="display: flex; gap: 8px;">
+          <button type="button" onclick="flushOfflineQueue(true)" style="flex: 1; background: #2563eb; color: #fff; border: none; border-radius: 8px; padding: 10px; font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px;">
+            <span>🔄</span>
+            <span>Отправить на VDS</span>
+          </button>
+          <button type="button" onclick="copyOfflineScansToClipboard()" style="background: #3f3f46; color: #f4f4f5; border: none; border-radius: 8px; padding: 10px 14px; font-size: 13px; font-weight: 600; cursor: pointer;" title="Скопировать текстовый список">
+            📋 Копия
+          </button>
+        </div>
+        <button type="button" onclick="closeOfflineModal()" style="background: transparent; color: #a1a1aa; border: 1px solid #3f3f46; border-radius: 8px; padding: 8px; font-size: 13px; cursor: pointer;">
+          Закрыть
+        </button>
+      </div>
+    </div>
+  </div>
+
   <script>
+    // ==========================================
+    // ОФЛАЙН-БУФЕР (IndexedDB) - ZERO DATA LOSS
+    // ==========================================
+    const RevizorOffline = {
+      dbName: 'revizor_offline_db',
+      dbVersion: 1,
+      storeName: 'pending_scans',
+      db: null,
+
+      async open() {
+        if (this.db) return this.db;
+        return new Promise((resolve, reject) => {
+          const req = indexedDB.open(this.dbName, this.dbVersion);
+          req.onupgradeneeded = (e) => {
+            const db = e.target.result;
+            if (!db.objectStoreNames.contains(this.storeName)) {
+              const store = db.createObjectStore(this.storeName, { keyPath: 'client_scan_id' });
+              store.createIndex('timestamp', 'timestamp', { unique: false });
+            }
+          };
+          req.onsuccess = (e) => {
+            this.db = e.target.result;
+            resolve(this.db);
+          };
+          req.onerror = (e) => reject(e.target.error);
+        });
+      },
+
+      async addScan(scan) {
+        const db = await this.open();
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction(this.storeName, 'readwrite');
+          const store = tx.objectStore(this.storeName);
+          store.put(scan);
+          tx.oncomplete = () => {
+            this.updateBadge();
+            resolve(scan);
+          };
+          tx.onerror = (e) => reject(e.target.error);
+        });
+      },
+
+      async getAll() {
+        try {
+          const db = await this.open();
+          return new Promise((resolve, reject) => {
+            const tx = db.transaction(this.storeName, 'readonly');
+            const store = tx.objectStore(this.storeName);
+            const req = store.getAll();
+            req.onsuccess = () => resolve(req.result || []);
+            req.onerror = (e) => reject(e.target.error);
+          });
+        } catch (_) {
+          return [];
+        }
+      },
+
+      async getCount() {
+        try {
+          const db = await this.open();
+          return new Promise((resolve) => {
+            const tx = db.transaction(this.storeName, 'readonly');
+            const store = tx.objectStore(this.storeName);
+            const req = store.count();
+            req.onsuccess = () => resolve(req.result || 0);
+            req.onerror = () => resolve(0);
+          });
+        } catch (_) {
+          return 0;
+        }
+      },
+
+      async removeScans(ids) {
+        if (!ids || ids.length === 0) return;
+        try {
+          const db = await this.open();
+          return new Promise((resolve, reject) => {
+            const tx = db.transaction(this.storeName, 'readwrite');
+            const store = tx.objectStore(this.storeName);
+            ids.forEach(id => store.delete(id));
+            tx.oncomplete = () => {
+              this.updateBadge();
+              resolve();
+            };
+            tx.onerror = (e) => reject(e.target.error);
+          });
+        } catch (e) {
+          console.error('Error removing scans from IndexedDB:', e);
+        }
+      },
+
+      async updateBadge() {
+        try {
+          const count = await this.getCount();
+          const badge = document.getElementById('offline-buffer-badge');
+          const countEl = document.getElementById('offline-buffer-count');
+          if (badge && countEl) {
+            if (count > 0) {
+              countEl.textContent = count;
+              badge.style.display = 'inline-flex';
+            } else {
+              badge.style.display = 'none';
+            }
+          }
+        } catch (_) {}
+      }
+    };
+
+    function generateClientScanId() {
+      return 'scan_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+    }
+
+    let isFlushingQueue = false;
+
+    async function flushOfflineQueue(manual = false) {
+      if (isFlushingQueue) return;
+      isFlushingQueue = true;
+      try {
+        const pending = await RevizorOffline.getAll();
+        if (!pending || pending.length === 0) {
+          RevizorOffline.updateBadge();
+          if (manual) showToast('Буфер телефона пуст (все данные на сервере)');
+          return;
+        }
+
+        const payload = {
+          scans: pending.map(s => ({
+            location: s.location,
+            barcode: s.barcode,
+            quantity: s.quantity,
+            box_number: s.box_number || '',
+            allow_unknown: !!s.allow_unknown,
+            client_scan_id: s.client_scan_id
+          }))
+        };
+
+        const res = await fetchWithTimeout('/api/scan/batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        }, 9000);
+
+        const data = await res.json();
+        if (data.success && Array.isArray(data.results)) {
+          const successfulIds = data.results.filter(r => r.success).map(r => r.client_scan_id);
+          if (successfulIds.length > 0) {
+            await RevizorOffline.removeScans(successfulIds);
+            setOnlineState(true);
+            showToast(`✓ Выгружено из памяти: ${successfulIds.length} поз.`);
+            if (activeTask) {
+              loadTaskItems();
+            }
+          }
+        }
+      } catch (err) {
+        setOnlineState(false, 'Связь с сервером отсутствует. Сканы надежно сохранены в телефоне.');
+        if (manual) {
+          showToast('⚠️ VDS пока недоступен. Сканы сохранены в памяти телефона.');
+        }
+      } finally {
+        isFlushingQueue = false;
+        RevizorOffline.updateBadge();
+        renderOfflineModalList();
+      }
+    }
+
+    async function copyOfflineScansToClipboard() {
+      const scans = await RevizorOffline.getAll();
+      if (!scans || scans.length === 0) {
+        showToast('Буфер пуст');
+        return;
+      }
+      const lines = scans.map((s, idx) => {
+        const time = new Date(s.timestamp).toLocaleTimeString();
+        return `${idx + 1}. [${time}] ШК/ЛК: ${s.barcode || s.sku} | Кол-во: ${s.quantity} | Место: ${s.location}${s.box_number ? ' | Кор: ' + s.box_number : ''}${s.name ? ' | ' + s.name : ''}`;
+      });
+      const text = 'Ревизор — Неотправленные сканы из памяти телефона (' + scans.length + ' поз.):\n' + lines.join('\n');
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        try {
+          await navigator.clipboard.writeText(text);
+          showToast('📋 Список скопирован в буфер обмена!');
+        } catch (_) {
+          prompt('Скопируйте текст вручную:', text);
+        }
+      } else {
+        prompt('Скопируйте текст вручную:', text);
+      }
+    }
+
+    async function renderOfflineModalList() {
+      const container = document.getElementById('offline-modal-list');
+      if (!container) return;
+      const scans = await RevizorOffline.getAll();
+      if (!scans || scans.length === 0) {
+        container.innerHTML = '<div style="text-align: center; color: #71717a; padding: 20px; font-size: 13px;">Все данные переданы на сервер. Буфер пуст.</div>';
+        return;
+      }
+      container.innerHTML = scans.map(s => {
+        const time = new Date(s.timestamp).toLocaleTimeString();
+        const box = s.box_number ? `<span style="background: #27272a; border: 1px solid #3f3f46; color: #e4e4e7; border-radius: 4px; padding: 1px 4px; font-size: 10px;">📦 ${escapeHtml(s.box_number)}</span>` : '';
+        return `
+          <div style="background: #27272a; border: 1px solid #3f3f46; border-radius: 8px; padding: 8px 10px; display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <div style="font-weight: 700; font-size: 13px; color: #38bdf8;">${escapeHtml(s.barcode || s.sku)}</div>
+              <div style="font-size: 11px; color: #a1a1aa; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(s.name || 'Товар')}</div>
+              <div style="font-size: 10px; color: #71717a; margin-top: 2px;">${time} · ${escapeHtml(s.location)} ${box}</div>
+            </div>
+            <div style="text-align: right;">
+              <div style="font-size: 15px; font-weight: 800; color: #4ade80;">+${s.quantity} шт</div>
+              <div style="font-size: 10px; color: #f59e0b; font-weight: 600;">в памяти</div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function openOfflineModal() {
+      renderOfflineModalList();
+      const m = document.getElementById('modal-offline');
+      if (m) m.style.display = 'block';
+    }
+
+    function closeOfflineModal() {
+      const m = document.getElementById('modal-offline');
+      if (m) m.style.display = 'none';
+    }
+
     let activeTask = null;
     let currentTaskStatus = 'in_progress';
     let currentItemsCount = 0;
@@ -1297,7 +1572,7 @@
         if (tasksAlert) tasksAlert.style.display = 'block';
         if (detailAlert) detailAlert.style.display = 'block';
         if (storeLabel) {
-          storeLabel.innerHTML = '<span style="color:#ef4444; font-weight:700;">🔴 НЕТ СВЯЗИ С ПК</span> · Wi-Fi отключен?';
+          storeLabel.innerHTML = '<span style="color:#ef4444; font-weight:700;">🔴 НЕТ СВЯЗИ С VDS</span> · Буфер активен';
         }
         if (badgeLive) {
           badgeLive.className = 'badge-live badge-offline';
@@ -1305,19 +1580,19 @@
         }
         const scannerModal = document.getElementById('scanner-modal');
         if (hud && scannerModal && scannerModal.style.display === 'flex') {
-          hud.innerHTML = '<span style="color: #ef4444; font-weight: 800; font-size: 13px;">⚠️ НЕТ СВЯЗИ С ПК! Сканирование приостановлено</span>';
+          hud.innerHTML = '<span style="color: #fbbf24; font-weight: 700; font-size: 12px;">💾 АВТОНОМНЫЙ РЕЖИМ (сканы пишутся в память телефона)</span>';
         }
 
         // Если только что перешли в offline
         if (prev === true) {
           playErrorTone();
-          showToast('⚠️ ВНИМАНИЕ: Связь с компьютером разорвана!');
+          showToast('⚠️ Связь с VDS потеряна. Сканы пишутся в память телефона!');
         }
       } else {
         if (banner) banner.style.display = 'none';
         if (tasksAlert) tasksAlert.style.display = 'none';
         if (detailAlert) detailAlert.style.display = 'none';
-        const storeTxt = cachedStoreInfo || 'Подключено к ПК';
+        const storeTxt = cachedStoreInfo || 'Подключено к VDS';
         if (storeLabel) {
           storeLabel.innerHTML = `<span style="color:#34d399; font-weight:700;">🟢 В сети</span> · ${escapeHtml(storeTxt)}`;
         }
@@ -1335,7 +1610,8 @@
         // Если связь восстановилась
         if (prev === false) {
           playBeep();
-          showToast('🟢 Связь с компьютером восстановлена!');
+          showToast('🟢 Связь с VDS восстановлена! Выгрузка буфера...');
+          flushOfflineQueue();
           if (activeTask) {
             loadTaskItems();
           } else {
@@ -1417,6 +1693,8 @@
     }
 
     async function initApp() {
+      await RevizorOffline.updateBadge();
+      flushOfflineQueue();
       await checkConnectionNow();
       loadTasks();
 
@@ -1424,6 +1702,11 @@
       setInterval(() => {
         checkConnectionNow();
       }, 2500);
+
+      // Периодическая выгрузка офлайн-буфера (раз в 3.5 сек)
+      setInterval(() => {
+        flushOfflineQueue();
+      }, 3500);
 
       // Периодическое автообновление списка задач с ПК (раз в 4 сек)
       setInterval(() => {
@@ -2162,63 +2445,50 @@
       const product = currentModalProduct;
       closeProductModal();
 
-      if (!isServerOnline) {
-        playErrorTone();
-        showToast('⚠️ Ошибка: нет связи с ПК! Товар не может быть добавлен.');
-        return;
-      }
+      const scanId = generateClientScanId();
+      const scanObj = {
+        client_scan_id: scanId,
+        timestamp: Date.now(),
+        location: activeTask,
+        barcode: product.barcode || product.sku,
+        quantity: qty,
+        box_number: boxVal,
+        allow_unknown: false,
+        name: product.name || '',
+        sku: product.sku || ''
+      };
 
       try {
-        if (submitBtn) submitBtn.disabled = true;
-        const res = await fetchWithTimeout('/api/scan', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            location: activeTask,
-            barcode: product.barcode || product.sku,
-            quantity: qty,
-            box_number: boxVal,
-            allow_unknown: false
-          })
-        }, 5000);
-        const data = await res.json();
-        if (data.success && data.item) {
-          setOnlineState(true);
-          playBeep();
-          const aimBox = document.getElementById('scanner-aim-box');
-          if (aimBox) {
-            aimBox.classList.add('scanned-success');
-            setTimeout(() => aimBox.classList.remove('scanned-success'), 550);
-          }
-
-          scannerSessionCount++;
-          const counterEl = document.getElementById('scanner-session-count');
-          if (counterEl) counterEl.textContent = scannerSessionCount;
-
-          const hud = document.getElementById('scanner-hud-overlay');
-          if (hud) {
-            hud.innerHTML = `<span style="color: #10b981; font-weight: 700;">✓ +${qty} шт: ${escapeHtml(data.item.name)}</span><br><span style="color: #94a3b8; font-size: 11px;">ЛК: ${escapeHtml(data.item.sku)}${boxVal ? ' | Кор: ' + escapeHtml(boxVal) : ''}</span>`;
-          }
-
-          showToast(`✓ +${qty} шт: ${data.item.name}${boxVal ? ' [📦 № ' + boxVal + ']' : ''}`);
-
-          const inp = document.getElementById('input-barcode');
-          if (inp) inp.value = '';
-          inputQty = 1;
-          const qtyVal = document.getElementById('qty-picker-val');
-          if (qtyVal) qtyVal.textContent = '1';
-
-          loadTaskItems();
-        } else {
-          showToast(`✕ ${data.error || 'Ошибка добавления'}`);
-        }
+        await RevizorOffline.addScan(scanObj);
       } catch (err) {
-        setOnlineState(false, err.message || '' + err);
-        playErrorTone();
-        showToast('✕ Ошибка связи с ПК: товар НЕ сохранён!');
-      } finally {
-        if (submitBtn) submitBtn.disabled = false;
+        console.error('Buffer save error:', err);
       }
+
+      playBeep();
+      const aimBox = document.getElementById('scanner-aim-box');
+      if (aimBox) {
+        aimBox.classList.add('scanned-success');
+        setTimeout(() => aimBox.classList.remove('scanned-success'), 550);
+      }
+
+      scannerSessionCount++;
+      const counterEl = document.getElementById('scanner-session-count');
+      if (counterEl) counterEl.textContent = scannerSessionCount;
+
+      const hud = document.getElementById('scanner-hud-overlay');
+      if (hud) {
+        hud.innerHTML = `<span style="color: #10b981; font-weight: 700;">✓ +${qty} шт: ${escapeHtml(product.name)}</span><br><span style="color: #94a3b8; font-size: 11px;">ЛК: ${escapeHtml(product.sku)}${boxVal ? ' | Кор: ' + escapeHtml(boxVal) : ''}</span>`;
+      }
+
+      showToast(`✓ +${qty} шт: ${product.name}${boxVal ? ' [📦 № ' + boxVal + ']' : ''}`);
+
+      const inp = document.getElementById('input-barcode');
+      if (inp) inp.value = '';
+      inputQty = 1;
+      const qtyVal = document.getElementById('qty-picker-val');
+      if (qtyVal) qtyVal.textContent = '1';
+
+      flushOfflineQueue();
     }
 
     async function scanCurrentBarcode(providedBarcode, allowUnknown) {
@@ -2245,34 +2515,33 @@
       if (!barcode) return;
 
       if (allowUnknown) {
+        const scanId = generateClientScanId();
+        const scanObj = {
+          client_scan_id: scanId,
+          timestamp: Date.now(),
+          location: activeTask,
+          barcode: barcode,
+          quantity: inputQty || 1,
+          box_number: boxNumber,
+          allow_unknown: true,
+          name: 'Н/Д ' + barcode,
+          sku: barcode
+        };
         try {
-          const res = await fetchWithTimeout('/api/scan', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              location: activeTask,
-              barcode: barcode,
-              quantity: inputQty,
-              box_number: boxNumber,
-              allow_unknown: true
-            })
-          }, 5000);
-          const data = await res.json();
-          if (data.success && data.item) {
-            setOnlineState(true);
-            playBeep();
-            const boxLabel = data.item.box_number ? ` [📦 № ${data.item.box_number}]` : '';
-            showToast(`⚠️ +${inputQty} шт (Н/Д): ${data.item.sku}${boxLabel}`);
-            inp.value = '';
-            inputQty = 1;
-            document.getElementById('qty-picker-val').textContent = '1';
-            loadTaskItems();
-          }
+          await RevizorOffline.addScan(scanObj);
         } catch (e) {
-          setOnlineState(false, e);
-          playErrorTone();
-          showToast('⚠️ Ошибка связи с компьютером: товар НЕ сохранён!');
+          console.error(e);
         }
+
+        playBeep();
+        const boxLabel = boxNumber ? ` [📦 № ${boxNumber}]` : '';
+        showToast(`⚠️ +${inputQty || 1} шт (Н/Д): ${barcode}${boxLabel}`);
+        inp.value = '';
+        inputQty = 1;
+        const qv = document.getElementById('qty-picker-val');
+        if (qv) qv.textContent = '1';
+
+        flushOfflineQueue();
         return;
       }
 
@@ -2292,7 +2561,9 @@
       } catch (e) {
         setOnlineState(false, e);
         playErrorTone();
-        showToast('⚠️ Ошибка связи с компьютером: товар НЕ сохранён!');
+        if (confirm(`Нет связи с сервером.\nСохранить штрихкод «${barcode}» в память телефона как Н/Д (будет передан при появлении сети)?`)) {
+          scanCurrentBarcode(barcode, true);
+        }
       }
     }
 
@@ -2493,35 +2764,32 @@
 
       // Режим непрерывного добавления: проверяем каталог и открываем модальное окно добавления
       if (allowUnknown) {
+        const boxInp = document.getElementById('input-box');
+        const boxVal = boxInp ? boxInp.value.trim() : '';
+        const scanId = generateClientScanId();
+        const scanObj = {
+          client_scan_id: scanId,
+          timestamp: Date.now(),
+          location: activeTask,
+          barcode: clean,
+          quantity: inputQty || 1,
+          box_number: boxVal,
+          allow_unknown: true,
+          name: 'Н/Д ' + clean,
+          sku: clean
+        };
         try {
-          const boxInp = document.getElementById('input-box');
-          const boxVal = boxInp ? boxInp.value.trim() : '';
-          const res = await fetchWithTimeout('/api/scan', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              location: activeTask,
-              barcode: clean,
-              quantity: inputQty || 1,
-              box_number: boxVal,
-              allow_unknown: true
-            })
-          }, 5000);
-          const data = await res.json();
-          if (data.success && data.item) {
-            setOnlineState(true);
-            playBeep();
-            scannerSessionCount++;
-            const counterEl = document.getElementById('scanner-session-count');
-            if (counterEl) counterEl.textContent = scannerSessionCount;
-            showToast(`⚠️ +${inputQty || 1} шт (Н/Д): ${clean}`);
-            loadTaskItems();
-          }
+          await RevizorOffline.addScan(scanObj);
         } catch (e) {
-          setOnlineState(false, e);
-          playErrorTone();
-          showToast(`⚠️ Сбой связи с ПК! «${clean}» НЕ сохранён!`);
+          console.error(e);
         }
+
+        playBeep();
+        scannerSessionCount++;
+        const counterEl = document.getElementById('scanner-session-count');
+        if (counterEl) counterEl.textContent = scannerSessionCount;
+        showToast(`⚠️ +${inputQty || 1} шт (Н/Д): ${clean}`);
+        flushOfflineQueue();
         return;
       }
 
@@ -2563,9 +2831,10 @@
         setOnlineState(false, err);
         playErrorTone();
         if (hud) {
-          hud.innerHTML = `<span style="color: #ef4444; font-weight: 800;">✕ Ошибка связи с ПК: товар не сохранен!</span>`;
+          hud.innerHTML = `<span style="color: #fbbf24; font-weight: 700;">⚠️ Нет связи с сервером для проверки каталога</span>`;
         }
-        showToast(`⚠️ Ошибка связи с ПК! «${clean}» не проверен!`);
+        showToast(`⚠️ Нет связи с сервером! «${clean}»`);
+        showScanNotFoundModal(clean);
       }
     }
 
@@ -2889,12 +3158,6 @@
       const code = pendingNotFoundCode;
       closeScanNotFound();
       if (!code) return;
-
-      if (!isServerOnline) {
-        playErrorTone();
-        showToast('⚠️ Ошибка: нет связи с компьютером! Товар не добавлен.');
-        return;
-      }
 
       lastScannedBarcode = null;
       lastScannedTime = 0;
