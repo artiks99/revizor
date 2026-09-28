@@ -25,5 +25,12 @@ services:
       - DB_PATH=/opt/revizor/data/revision.db
     volumes:
       - ./data:/opt/revizor/data
+      - ./backups:/opt/revizor/backups
     ports:
       - "127.0.0.1:4820:4820"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:4820/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

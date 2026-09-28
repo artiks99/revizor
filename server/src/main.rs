@@ -356,6 +356,118 @@ fn sync_upload_data(
   }))
 }
 
+fn archive_revision(
+  db_path: &Path,
+  revision_id: &str,
+  store_number: &str,
+  clear_all: bool,
+) -> Result<serde_json::Value, String> {
+  let conn = open_db(db_path)?;
+  let clean_rev = revision_id.trim();
+  let clean_store = store_number.trim();
+
+  // 1. Create backups directory if not exists
+  let backup_dir = match std::env::var("BACKUP_DIR") {
+    Ok(d) => PathBuf::from(d),
+    Err(_) => {
+      if let Some(parent) = db_path.parent() {
+        if let Some(grandparent) = parent.parent() {
+          grandparent.join("backups")
+        } else {
+          parent.join("backups")
+        }
+      } else {
+        PathBuf::from("/opt/revizor/backups")
+      }
+    }
+  };
+  let _ = std::fs::create_dir_all(&backup_dir);
+
+  // 2. Format timestamp from SQLite
+  let timestamp: String = conn
+    .query_row("SELECT strftime('%Y%m%d_%H%M%S', 'now', 'localtime')", [], |r| r.get(0))
+    .unwrap_or_else(|_| "backup".to_string());
+
+  let store_tag = if clean_store.is_empty() { "all".to_string() } else { clean_store.to_string() };
+  let rev_tag = if clean_rev.is_empty() { "all".to_string() } else { clean_rev.to_string() };
+  let backup_filename = format!("archive_rev_{}_{}_{}.db", store_tag, rev_tag, timestamp);
+  let backup_file = backup_dir.join(&backup_filename);
+
+  // 3. Atomically snapshot the database using VACUUM INTO
+  let backup_path_str = backup_file.to_string_lossy().to_string();
+  conn.execute("VACUUM INTO ?1", params![backup_path_str])
+    .map_err(|e| format!("Ошибка создания снимка БД: {}", e))?;
+
+  // 4. Delete the archived revision's data from active tables
+  if clear_all {
+    let _ = conn.execute("DELETE FROM mobile_tasks", []);
+    let _ = conn.execute("DELETE FROM mobile_task_items", []);
+    let _ = conn.execute("DELETE FROM inventory_items", []);
+    let _ = conn.execute("DELETE FROM sync_events", []);
+    let _ = conn.execute("DELETE FROM store_catalog", []);
+    let _ = conn.execute("DELETE FROM store_stock", []);
+    let _ = conn.execute("DELETE FROM processed_client_scans", []);
+  } else {
+    if !clean_rev.is_empty() || !clean_store.is_empty() {
+      let _ = conn.execute(
+        "DELETE FROM inventory_items WHERE (?1 != '' AND revision_id = ?1) OR (?2 != '' AND store_number = ?2)",
+        params![clean_rev, clean_store],
+      );
+      let _ = conn.execute(
+        "DELETE FROM mobile_task_items WHERE ?1 != '' AND revision_id = ?1",
+        params![clean_rev],
+      );
+      let _ = conn.execute(
+        "DELETE FROM sync_events WHERE (?1 != '' AND revision_id = ?1) OR (?2 != '' AND store_number = ?2)",
+        params![clean_rev, clean_store],
+      );
+      let _ = conn.execute(
+        "DELETE FROM store_catalog WHERE (?1 != '' AND revision_id = ?1) OR (?2 != '' AND store_number = ?2)",
+        params![clean_rev, clean_store],
+      );
+      let _ = conn.execute(
+        "DELETE FROM store_stock WHERE (?1 != '' AND revision_id = ?1) OR (?2 != '' AND store_number = ?2)",
+        params![clean_rev, clean_store],
+      );
+      let _ = conn.execute(
+        "DELETE FROM processed_client_scans WHERE (?1 != '' AND revision_id = ?1) OR (?2 != '' AND store_number = ?2)",
+        params![clean_rev, clean_store],
+      );
+      let _ = conn.execute(
+        "DELETE FROM mobile_tasks WHERE (?1 != '' AND revision_id = ?1) OR name NOT IN (SELECT DISTINCT location FROM inventory_items)",
+        params![clean_rev],
+      );
+    }
+  }
+
+  // 5. Optimize and truncate WAL
+  let _ = conn.execute_batch("PRAGMA optimize; PRAGMA wal_checkpoint(TRUNCATE);");
+
+  // 6. Rotate backups (keep last 30)
+  if let Ok(entries) = std::fs::read_dir(&backup_dir) {
+    let mut files: Vec<PathBuf> = entries
+      .filter_map(|e| e.ok())
+      .map(|e| e.path())
+      .filter(|p| p.is_file() && p.extension().map_or(false, |ext| ext == "db"))
+      .collect();
+    files.sort_by(|a, b| b.cmp(a));
+    if files.len() > 30 {
+      for old_file in files.iter().skip(30) {
+        let _ = std::fs::remove_file(old_file);
+      }
+    }
+  }
+
+  println!("🗄️ Ревизия заархивирована на VDS: rev={}, store={}, снимок: {}", clean_rev, clean_store, backup_path_str);
+
+  Ok(json!({
+    "success": true,
+    "archived_file": backup_filename,
+    "store_number": clean_store,
+    "revision_id": clean_rev,
+  }))
+}
+
 fn flush_draft_items(conn: &Connection, task_name: &str, revision_id: &str, store_number: &str) -> Result<(), String> {
   let mut stmt = conn
     .prepare("SELECT id, sku, barcode, name, quantity, box_number FROM mobile_task_items WHERE task_name = ?1")
@@ -1216,6 +1328,7 @@ fn main() {
   };
 
   println!("🌐 Сервер слушает на http://{}", bind_addr);
+  let start_time = std::time::Instant::now();
 
   for mut request in server.incoming_requests() {
     let url = request.url().to_string();
@@ -1282,6 +1395,45 @@ fn main() {
           "store_number": active_store,
         });
         let _ = request.respond(respond_json(&res, 200));
+      }
+
+      (Method::Get, "/api/health") => {
+        let uptime = start_time.elapsed().as_secs();
+        let db_size = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
+        let (items_count, tasks_count): (i64, i64) = if let Ok(conn) = open_db(&db_path) {
+          let items: i64 = conn.query_row("SELECT COUNT(*) FROM inventory_items", [], |r| r.get(0)).unwrap_or(0);
+          let tasks: i64 = conn.query_row("SELECT COUNT(*) FROM mobile_tasks", [], |r| r.get(0)).unwrap_or(0);
+          (items, tasks)
+        } else {
+          (0, 0)
+        };
+        let res = json!({
+          "status": "ok",
+          "version": "1.0.17",
+          "uptime_seconds": uptime,
+          "db_size_bytes": db_size,
+          "items_count": items_count,
+          "tasks_count": tasks_count,
+        });
+        let _ = request.respond(respond_json(&res, 200));
+      }
+
+      (Method::Post, "/api/revision/archive") => {
+        let mut body = String::new();
+        let _ = request.as_reader().read_to_string(&mut body);
+        let val: serde_json::Value = serde_json::from_str(&body).unwrap_or(json!({}));
+        let rev = val.get("revision_id").and_then(|v| v.as_str()).unwrap_or(&active_rev);
+        let store = val.get("store_number").and_then(|v| v.as_str()).unwrap_or(&active_store);
+        let clear_all = val.get("clear_all").and_then(|v| v.as_bool()).unwrap_or(false);
+
+        match archive_revision(&db_path, rev, store, clear_all) {
+          Ok(res) => {
+            let _ = request.respond(respond_json(&res, 200));
+          }
+          Err(e) => {
+            let _ = request.respond(respond_json(&json!({ "success": false, "error": e }), 500));
+          }
+        }
       }
 
       (Method::Get, "/api/catalog/search") => {

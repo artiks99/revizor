@@ -274,6 +274,28 @@ export function useMobileSync() {
     return true
   }
 
+  async function archiveRevisionOnVds(revisionId: string, storeNumber: string) {
+    try {
+      const resp = await fetch(`${VDS_BASE_URL}/api/revision/archive`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ revision_id: revisionId, store_number: storeNumber }),
+        signal: AbortSignal.timeout(8000),
+      })
+      if (resp.ok) {
+        const data = await resp.json()
+        eventBus.emit('app:toast', {
+          type: 'info',
+          message: `🗄️ Данные магазина №${storeNumber} на VDS отправлены в архив и очищены`,
+        })
+        pushActivity(`Магазин №${storeNumber} архивирован на VDS`, 'connect')
+        return data
+      }
+    } catch (err) {
+      console.warn('[useMobileSync] archiveRevisionOnVds error:', err)
+    }
+  }
+
   return {
     serverInfo,
     isServerRunning,
@@ -283,8 +305,21 @@ export function useMobileSync() {
     startServer,
     checkServerStatus,
     uploadDataToVds,
+    archiveRevisionOnVds,
     stopServer,
     clearActivities,
     copyActivitiesToClipboard,
   }
+}
+
+// Автоматическая архивация данных на VDS при перемещении ревизии в архив
+let isArchiveListenerRegistered = false
+if (!isArchiveListenerRegistered) {
+  isArchiveListenerRegistered = true
+  eventBus.on('revision:archived', async ({ id, storeNumber, isArchived }) => {
+    if (isArchived) {
+      const { archiveRevisionOnVds } = useMobileSync()
+      await archiveRevisionOnVds(id, storeNumber)
+    }
+  })
 }
