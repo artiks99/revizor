@@ -200,6 +200,8 @@ pub struct CatalogSuggestionDto {
   pub sku: String,
   pub name: String,
   pub barcode: String,
+  pub stock_qty: f64,
+  pub multiplicity: i64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -597,27 +599,71 @@ fn search_catalog(db_path: &Path, query: &str) -> Result<Vec<CatalogSuggestionDt
      LIMIT 15"
   };
 
+  let mult_exists: bool = conn
+    .query_row(
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='store_multiplicity'",
+      [],
+      |_| Ok(true),
+    )
+    .unwrap_or(false);
+
   let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
   let rows = stmt.query_map(params![q], |row| {
-    Ok(CatalogSuggestionDto {
-      sku: row.get(0)?,
-      name: row.get(1)?,
-      barcode: row.get(2)?,
-    })
+    Ok((
+      row.get::<_, String>(0)?,
+      row.get::<_, String>(1)?,
+      row.get::<_, String>(2)?,
+    ))
   }).map_err(|e| e.to_string())?;
 
   let mut list = Vec::new();
   for r in rows.flatten() {
-    let mut dto = r;
-    if !dto.barcode.is_empty() {
-      let first_bc = dto.barcode.split(',').next().unwrap_or("").trim().to_string();
-      if first_bc != dto.sku {
-        dto.barcode = first_bc;
+    let (sku, name, raw_bc) = r;
+    let mut clean_bc = raw_bc;
+    if !clean_bc.is_empty() {
+      let first_bc = clean_bc.split([',', ';', '\n', '\r', '/', ' ']).next().unwrap_or("").trim().to_string();
+      if first_bc != sku {
+        clean_bc = first_bc;
       } else {
-        dto.barcode = String::new();
+        clean_bc = String::new();
       }
     }
-    list.push(dto);
+
+    let stock_qty: f64 = if stock_exists {
+      conn.query_row(
+        "SELECT COALESCE(quantity, 0) FROM store_stock WHERE TRIM(sku) = ?1 LIMIT 1",
+        params![sku],
+        |row| row.get(0),
+      ).unwrap_or(0.0)
+    } else {
+      0.0
+    };
+
+    let digits_only: String = sku.chars().filter(|c| c.is_ascii_digit()).collect();
+    let unpadded_digits = digits_only.trim_start_matches('0').to_string();
+
+    let multiplicity: i64 = if mult_exists {
+      conn.query_row(
+        "SELECT COALESCE(multiplicity, 1) FROM store_multiplicity 
+         WHERE TRIM(sku) = ?1 
+            OR (length(?2) > 0 AND LTRIM(TRIM(sku), '0') = ?2)
+            OR (length(?3) > 0 AND TRIM(sku) = ?3)
+         ORDER BY CASE WHEN TRIM(sku) = ?1 THEN 1 ELSE 2 END
+         LIMIT 1",
+        params![sku, unpadded_digits, digits_only],
+        |row| row.get(0),
+      ).unwrap_or(1)
+    } else {
+      1
+    };
+
+    list.push(CatalogSuggestionDto {
+      sku,
+      name,
+      barcode: clean_bc,
+      stock_qty,
+      multiplicity,
+    });
   }
   Ok(list)
 }
@@ -2268,6 +2314,32 @@ fn get_mobile_html() -> String {
       padding: 2px 7px;
       border-radius: 6px;
       letter-spacing: 0.02em;
+    }
+    .suggestion-badge-stock {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #38bdf8;
+      background: rgba(14, 165, 233, 0.15);
+      border: 1px solid rgba(14, 165, 233, 0.35);
+      padding: 1px 6px;
+      border-radius: 6px;
+      white-space: nowrap;
+    }
+    .suggestion-badge-mult {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #fbbf24;
+      background: rgba(245, 158, 11, 0.15);
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      padding: 1px 6px;
+      border-radius: 6px;
+      white-space: nowrap;
     }
     .suggestion-name {
       font-size: 13px;
@@ -4763,7 +4835,7 @@ fn get_mobile_html() -> String {
           if (data.success && data.items && data.items.length > 0) {
             const first = data.items[0];
             manualLkFoundItem = first;
-            preview.innerHTML = `<span style="color: #38bdf8; font-weight: 600;">✓ ${escapeHtml(first.name)}</span> <span style="color: #94a3b8; font-size: 11px;">(ЛК: ${escapeHtml(first.sku)})</span>`;
+            preview.innerHTML = `<span style="color: #38bdf8; font-weight: 600;">✓ ${escapeHtml(first.name)}</span> <span style="color: #94a3b8; font-size: 11px;">(ЛК: ${escapeHtml(first.sku)}, Ост: ${first.stock_qty ?? 0}, Кратн: ${first.multiplicity || 1})</span>`;
           } else {
             preview.innerHTML = `<span style="color: #fbbf24;">⚠️ Товар «${escapeHtml(q)}» не найден в каталоге</span>`;
           }
@@ -4903,12 +4975,16 @@ fn get_mobile_html() -> String {
       container.innerHTML = items.map((item, idx) => {
         const rawBc = (item.barcode || '').trim();
         const bcDisplay = (rawBc && rawBc !== item.sku) ? `ШК: ${escapeHtml(rawBc)}` : '';
+        const stockVal = item.stock_qty !== undefined && item.stock_qty !== null ? item.stock_qty : 0;
+        const multVal = item.multiplicity || 1;
         return `
           <div class="suggestion-item" data-idx="${idx}" onclick="selectSuggestion('${escapeHtml(item.sku)}')">
             <div style="flex: 1; min-width: 0;">
-              <div style="display: flex; align-items: center; gap: 8px;">
+              <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
                 <span class="suggestion-sku-pill">ЛК: ${escapeHtml(item.sku)}</span>
                 ${bcDisplay ? `<span class="suggestion-bc">${bcDisplay}</span>` : ''}
+                <span class="suggestion-badge-stock" title="Остаток по учету">Ост: ${stockVal}</span>
+                <span class="suggestion-badge-mult" title="Кратность коробки">Кратн: ${multVal}</span>
               </div>
               <div class="suggestion-name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</div>
             </div>

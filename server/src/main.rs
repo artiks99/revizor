@@ -38,6 +38,8 @@ pub struct CatalogSuggestionDto {
   pub sku: String,
   pub name: String,
   pub barcode: String,
+  pub stock_qty: f64,
+  pub multiplicity: i64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1087,27 +1089,74 @@ fn search_catalog(db_path: &Path, query: &str, revision_id: &str) -> Result<Vec<
      LIMIT 15"
   };
 
+  let mult_exists: bool = conn
+    .query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name='store_multiplicity'", [], |_| Ok(true))
+    .unwrap_or(false);
+
   let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
   let rows = stmt.query_map(params![q, clean_rev], |row| {
-    Ok(CatalogSuggestionDto {
-      sku: row.get(0)?,
-      name: row.get(1)?,
-      barcode: row.get(2)?,
-    })
+    Ok((
+      row.get::<_, String>(0)?,
+      row.get::<_, String>(1)?,
+      row.get::<_, String>(2)?,
+    ))
   }).map_err(|e| e.to_string())?;
 
   let mut list = Vec::new();
   for r in rows.flatten() {
-    let mut dto = r;
-    if !dto.barcode.is_empty() {
-      let first_bc = dto.barcode.split([',', ';', '\n', '\r', '/', ' ']).next().unwrap_or("").trim().to_string();
-      if first_bc != dto.sku {
-        dto.barcode = first_bc;
+    let (sku, name, raw_bc) = r;
+    let mut clean_bc = raw_bc;
+    if !clean_bc.is_empty() {
+      let first_bc = clean_bc.split([',', ';', '\n', '\r', '/', ' ']).next().unwrap_or("").trim().to_string();
+      if first_bc != sku {
+        clean_bc = first_bc;
       } else {
-        dto.barcode = String::new();
+        clean_bc = String::new();
       }
     }
-    list.push(dto);
+
+    let stock_qty: f64 = if stock_exists {
+      conn.query_row(
+        "SELECT COALESCE(quantity, 0) FROM store_stock 
+         WHERE TRIM(sku) = ?1 AND (length(?2) = 0 OR revision_id = ?2 OR revision_id = '') 
+         LIMIT 1",
+        params![sku, clean_rev],
+        |row| row.get(0),
+      ).unwrap_or(0.0)
+    } else {
+      0.0
+    };
+
+    let digits_only: String = sku.chars().filter(|c| c.is_ascii_digit()).collect();
+    let unpadded_digits = digits_only.trim_start_matches('0').to_string();
+
+    let multiplicity: i64 = if mult_exists {
+      conn.query_row(
+        "SELECT COALESCE(multiplicity, 1) FROM store_multiplicity 
+         WHERE (length(?4) = 0 OR revision_id = ?4 OR revision_id = '')
+           AND (TRIM(sku) = ?1 
+            OR (length(?2) > 0 AND LTRIM(TRIM(sku), '0') = ?2)
+            OR (length(?3) > 0 AND TRIM(sku) = ?3))
+         ORDER BY 
+           CASE 
+             WHEN TRIM(sku) = ?1 THEN 1 
+             ELSE 2 
+           END
+         LIMIT 1",
+        params![sku, unpadded_digits, digits_only, clean_rev],
+        |row| row.get(0),
+      ).unwrap_or(1)
+    } else {
+      1
+    };
+
+    list.push(CatalogSuggestionDto {
+      sku,
+      name,
+      barcode: clean_bc,
+      stock_qty,
+      multiplicity,
+    });
   }
   Ok(list)
 }
@@ -1847,7 +1896,7 @@ fn main() {
         };
         let res = json!({
           "status": "ok",
-          "version": "1.0.24",
+          "version": "1.0.25",
           "uptime_seconds": uptime,
           "db_size_bytes": db_size,
           "items_count": items_count,

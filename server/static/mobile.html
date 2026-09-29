@@ -432,6 +432,32 @@
       border-radius: 6px;
       letter-spacing: 0.02em;
     }
+    .suggestion-badge-stock {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #38bdf8;
+      background: rgba(14, 165, 233, 0.15);
+      border: 1px solid rgba(14, 165, 233, 0.35);
+      padding: 1px 6px;
+      border-radius: 6px;
+      white-space: nowrap;
+    }
+    .suggestion-badge-mult {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #fbbf24;
+      background: rgba(245, 158, 11, 0.15);
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      padding: 1px 6px;
+      border-radius: 6px;
+      white-space: nowrap;
+    }
     .suggestion-name {
       font-size: 13px;
       color: #f1f5f9;
@@ -3403,7 +3429,7 @@
           if (data.success && data.items && data.items.length > 0) {
             const first = data.items[0];
             manualLkFoundItem = first;
-            preview.innerHTML = `<span style="color: #38bdf8; font-weight: 600;">✓ ${escapeHtml(first.name)}</span> <span style="color: #94a3b8; font-size: 11px;">(ЛК: ${escapeHtml(first.sku)})</span>`;
+            preview.innerHTML = `<span style="color: #38bdf8; font-weight: 600;">✓ ${escapeHtml(first.name)}</span> <span style="color: #94a3b8; font-size: 11px;">(ЛК: ${escapeHtml(first.sku)}, Ост: ${first.stock_qty ?? 0}, Кратн: ${first.multiplicity || 1})</span>`;
           } else {
             preview.innerHTML = `<span style="color: #fbbf24;">⚠️ Товар «${escapeHtml(q)}» не найден в каталоге</span>`;
           }
@@ -3543,12 +3569,16 @@
       container.innerHTML = items.map((item, idx) => {
         const rawBc = (item.barcode || '').trim();
         const bcDisplay = (rawBc && rawBc !== item.sku) ? `ШК: ${escapeHtml(rawBc)}` : '';
+        const stockVal = item.stock_qty !== undefined && item.stock_qty !== null ? item.stock_qty : 0;
+        const multVal = item.multiplicity || 1;
         return `
           <div class="suggestion-item" data-idx="${idx}" onclick="selectSuggestion('${escapeHtml(item.sku)}')">
             <div style="flex: 1; min-width: 0;">
-              <div style="display: flex; align-items: center; gap: 8px;">
+              <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
                 <span class="suggestion-sku-pill">ЛК: ${escapeHtml(item.sku)}</span>
                 ${bcDisplay ? `<span class="suggestion-bc">${bcDisplay}</span>` : ''}
+                <span class="suggestion-badge-stock" title="Остаток по учету">Ост: ${stockVal}</span>
+                <span class="suggestion-badge-mult" title="Кратность коробки">Кратн: ${multVal}</span>
               </div>
               <div class="suggestion-name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</div>
             </div>
