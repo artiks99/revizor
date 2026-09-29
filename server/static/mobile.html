@@ -1734,7 +1734,7 @@
         if (tasksAlert) tasksAlert.style.display = 'block';
         if (detailAlert) detailAlert.style.display = 'block';
         if (storeLabel) {
-          storeLabel.innerHTML = '<span style="color:#ef4444; font-weight:700;">🔴 НЕТ СВЯЗИ С VDS</span> · Буфер активен';
+          storeLabel.innerHTML = '<span style="color:#ef4444; font-weight:700;">🔴 НЕТ СВЯЗИ С VDS</span>';
         }
         if (badgeLive) {
           badgeLive.className = 'badge-live badge-offline';
@@ -1754,9 +1754,8 @@
         if (banner) banner.style.display = 'none';
         if (tasksAlert) tasksAlert.style.display = 'none';
         if (detailAlert) detailAlert.style.display = 'none';
-        const storeTxt = activeStoreNumber ? `Магазин №${activeStoreNumber}` : (cachedStoreInfo || 'Подключено к VDS');
         if (storeLabel) {
-          storeLabel.innerHTML = `<span style="color:#34d399; font-weight:700;">🟢 В сети</span> · ${escapeHtml(storeTxt)}`;
+          storeLabel.innerHTML = '<span style="color:#34d399; font-weight:700;">🟢 В сети</span>';
         }
         if (badgeLive) {
           badgeLive.className = 'badge-live';
