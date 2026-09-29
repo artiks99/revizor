@@ -5,6 +5,7 @@ import { useMobileSync, VDS_BASE_URL } from '../../model/useMobileSync'
 import { eventBus } from '@shared/lib/eventBus'
 import { useInventoryStore } from '../../model/useInventoryStore'
 import MobileSessionHistory from './components/MobileSessionHistory.vue'
+import MobileConnectedClientsList from './components/MobileConnectedClientsList.vue'
 
 const props = defineProps<{
   isOpen: boolean
@@ -20,16 +21,18 @@ const emit = defineEmits<{
 const inventoryStore = useInventoryStore()
 
 const {
-  serverInfo,
-  isServerRunning,
   isVdsOnline,
   isSyncing,
   recentActivities,
+  connectedClients,
+  onlineClientsCount,
   startServer,
   uploadDataToVds,
   clearActivities,
+  fetchConnectedClients,
 } = useMobileSync()
 
+const activeTab = ref<'connect' | 'clients' | 'history'>('connect')
 const isLoading = ref(false)
 const copied = ref(false)
 const qrSvg = ref('')
@@ -110,7 +113,7 @@ watch(
     @click.self="emit('close')"
   >
     <div
-      class="relative w-full max-w-md overflow-hidden rounded-2xl border border-gray-800 bg-gray-950 p-6 shadow-2xl ring-1 ring-white/10"
+      class="relative w-full max-w-xl overflow-hidden rounded-2xl border border-gray-800 bg-gray-950 p-6 shadow-2xl ring-1 ring-white/10"
     >
       <!-- Header -->
       <div class="flex items-center justify-between border-b border-gray-800/80 pb-4">
@@ -131,83 +134,137 @@ watch(
         </button>
       </div>
 
-      <!-- Content -->
-      <div class="mt-4 space-y-4">
-        <!-- VDS Cloud status banner -->
-        <div class="flex items-center justify-between rounded-xl border border-gray-800 bg-gray-900/80 px-3 py-2 text-xs">
-          <div class="flex items-center gap-2">
-            <span
-              class="h-2.5 w-2.5 rounded-full"
-              :class="isVdsOnline ? 'bg-emerald-400 shadow-sm shadow-emerald-400/50 animate-pulse' : 'bg-rose-500'"
+      <!-- Top Tabs -->
+      <div class="mt-4 flex items-center gap-1 rounded-xl bg-gray-900/90 p-1 border border-gray-800/80">
+        <button
+          @click="activeTab = 'connect'"
+          type="button"
+          :class="activeTab === 'connect' ? 'bg-indigo-600 text-white font-semibold shadow-sm' : 'text-gray-400 hover:text-gray-200'"
+          class="flex-1 rounded-lg py-1.5 text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+        >
+          <span>📱 Подключение</span>
+        </button>
+        <button
+          @click="activeTab = 'clients'"
+          type="button"
+          :class="activeTab === 'clients' ? 'bg-indigo-600 text-white font-semibold shadow-sm' : 'text-gray-400 hover:text-gray-200'"
+          class="flex-1 rounded-lg py-1.5 text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+        >
+          <span>👥 Кто в сети</span>
+          <span
+            v-if="onlineClientsCount > 0"
+            class="rounded-full bg-emerald-500/20 px-1.5 py-0.2 text-[10px] font-bold text-emerald-300 ring-1 ring-emerald-500/40"
+          >
+            {{ onlineClientsCount }}
+          </span>
+        </button>
+        <button
+          @click="activeTab = 'history'"
+          type="button"
+          :class="activeTab === 'history' ? 'bg-indigo-600 text-white font-semibold shadow-sm' : 'text-gray-400 hover:text-gray-200'"
+          class="flex-1 rounded-lg py-1.5 text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+        >
+          <span>📜 История</span>
+          <span
+            v-if="recentActivities.length > 0"
+            class="rounded-full bg-indigo-500/20 px-1.5 py-0.2 text-[10px] font-bold text-indigo-300 ring-1 ring-indigo-500/40"
+          >
+            {{ recentActivities.length }}
+          </span>
+        </button>
+      </div>
+
+      <!-- Content Area -->
+      <div class="mt-4">
+        <!-- Tab 1: Connect & QR -->
+        <div v-show="activeTab === 'connect'" class="space-y-4">
+          <!-- VDS Cloud status banner -->
+          <div class="flex items-center justify-between rounded-xl border border-gray-800 bg-gray-900/80 px-3 py-2 text-xs">
+            <div class="flex items-center gap-2">
+              <span
+                class="h-2.5 w-2.5 rounded-full"
+                :class="isVdsOnline ? 'bg-emerald-400 shadow-sm shadow-emerald-400/50 animate-pulse' : 'bg-rose-500'"
+              />
+              <span class="font-medium text-gray-200">
+                {{ isVdsOnline ? 'VDS Сервер онлайн' : 'Проверка связи с сервером...' }}
+              </span>
+            </div>
+            <button
+              @click="handleManualSync"
+              :disabled="isSyncing"
+              class="flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-medium text-indigo-400 hover:bg-indigo-950/50 transition-colors cursor-pointer disabled:opacity-50"
+              title="Обновить каталог товаров и задач на VDS"
+            >
+              <span>{{ isSyncing ? '⏳ Синхронизация...' : '🔄 Обновить каталог' }}</span>
+            </button>
+          </div>
+
+          <!-- QR Code Container -->
+          <div class="flex flex-col items-center justify-center">
+            <div
+              v-if="isLoading || !qrSvg"
+              class="flex h-[210px] w-[210px] items-center justify-center rounded-2xl border border-gray-800 bg-gray-900/60"
+            >
+              <span class="text-xs text-gray-400">Генерация QR-кода...</span>
+            </div>
+            <div
+              v-else
+              class="overflow-hidden rounded-2xl border-4 border-white bg-white p-2 shadow-xl shadow-indigo-950/40"
+              v-html="qrSvg"
             />
-            <span class="font-medium text-gray-200">
-              {{ isVdsOnline ? 'VDS Сервер онлайн' : 'Проверка связи с сервером...' }}
-            </span>
+
+            <p class="mt-2 text-center text-xs text-gray-300 font-medium">
+              Наведите камеру смартфона на QR-код
+            </p>
           </div>
-          <button
-            @click="handleManualSync"
-            :disabled="isSyncing"
-            class="flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-medium text-indigo-400 hover:bg-indigo-950/50 transition-colors cursor-pointer disabled:opacity-50"
-            title="Обновить каталог товаров и задач на VDS"
-          >
-            <span>{{ isSyncing ? '⏳ Синхронизация...' : '🔄 Обновить каталог' }}</span>
-          </button>
+
+          <!-- URL Copy Section -->
+          <div class="flex items-center gap-2 rounded-xl border border-gray-800 bg-gray-900/80 p-2 text-xs">
+            <input
+              type="text"
+              readonly
+              :value="connectUrl"
+              class="flex-1 bg-transparent px-2 font-mono text-gray-300 outline-none select-all"
+            />
+            <button
+              @click="copyUrl"
+              type="button"
+              class="flex items-center gap-1 rounded-lg px-3 py-1.5 font-medium transition-colors cursor-pointer"
+              :class="copied ? 'bg-emerald-600 text-white' : 'bg-indigo-600 text-white hover:bg-indigo-500'"
+            >
+              <span>{{ copied ? 'Скопировано' : 'Копировать' }}</span>
+            </button>
+          </div>
+
+          <!-- Cloud Explanation hint -->
+          <div class="rounded-xl border border-emerald-500/20 bg-emerald-950/20 p-2.5 text-[11px] text-gray-300 space-y-1">
+            <div class="flex items-center gap-1.5 font-medium text-emerald-400">
+              <span>🚀</span>
+              <span>Работает из любой точки города:</span>
+            </div>
+            <p class="leading-relaxed text-[11px] text-gray-400">
+              Сканируйте штрихкоды с телефона через мобильный интернет <strong>4G/LTE</strong> или любой <strong>Wi-Fi</strong>. Потоковый сканер камеры открывается сразу без предупреждений сертификата.
+            </p>
+          </div>
         </div>
 
-        <!-- QR Code Container -->
-        <div class="flex flex-col items-center justify-center">
-          <div
-            v-if="isLoading || !qrSvg"
-            class="flex h-[230px] w-[230px] items-center justify-center rounded-2xl border border-gray-800 bg-gray-900/60"
-          >
-            <span class="text-xs text-gray-400">Генерация QR-кода...</span>
-          </div>
-          <div
-            v-else
-            class="overflow-hidden rounded-2xl border-4 border-white bg-white p-2 shadow-xl shadow-indigo-950/40"
-            v-html="qrSvg"
+        <!-- Tab 2: Connected Clients -->
+        <div v-show="activeTab === 'clients'">
+          <MobileConnectedClientsList
+            :clients="connectedClients"
+            :is-online="isVdsOnline"
+            @refresh="() => fetchConnectedClients(effectiveRevisionId, effectiveStoreNumber)"
           />
-
-          <p class="mt-2.5 text-center text-xs text-gray-300 font-medium">
-            Наведите камеру смартфона на QR-код
-          </p>
         </div>
 
-        <!-- URL Copy Section -->
-        <div class="flex items-center gap-2 rounded-xl border border-gray-800 bg-gray-900/80 p-2 text-xs">
-          <input
-            type="text"
-            readonly
-            :value="connectUrl"
-            class="flex-1 bg-transparent px-2 font-mono text-gray-300 outline-none select-all"
+        <!-- Tab 3: History Journal -->
+        <div v-show="activeTab === 'history'">
+          <MobileSessionHistory
+            :activities="recentActivities"
+            :is-server-running="isVdsOnline"
+            @clear="clearActivities"
           />
-          <button
-            @click="copyUrl"
-            type="button"
-            class="flex items-center gap-1 rounded-lg px-3 py-1.5 font-medium transition-colors cursor-pointer"
-            :class="copied ? 'bg-emerald-600 text-white' : 'bg-indigo-600 text-white hover:bg-indigo-500'"
-          >
-            <span>{{ copied ? 'Скопировано' : 'Копировать' }}</span>
-          </button>
         </div>
-
-        <!-- Cloud Explanation hint -->
-        <div class="rounded-xl border border-emerald-500/20 bg-emerald-950/20 p-2.5 text-[11px] text-gray-300 space-y-1">
-          <div class="flex items-center gap-1.5 font-medium text-emerald-400">
-            <span>🚀</span>
-            <span>Работает из любой точки города:</span>
-          </div>
-          <p class="leading-relaxed text-[11px] text-gray-400">
-            Сканируйте штрихкоды с телефона через мобильный интернет <strong>4G/LTE</strong> или любой <strong>Wi-Fi</strong>. Потоковый сканер камеры открывается сразу без предупреждений сертификата.
-          </p>
-        </div>
-
-        <!-- Live Activity feed -->
-        <MobileSessionHistory
-          :activities="recentActivities"
-          :is-server-running="isServerRunning"
-          @clear="clearActivities"
-        />
       </div>
 
       <!-- Footer -->

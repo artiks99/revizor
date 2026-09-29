@@ -180,6 +180,22 @@ fn ensure_mobile_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
     [],
   )?;
 
+  conn.execute(
+    "CREATE TABLE IF NOT EXISTS active_clients (
+      client_id TEXT PRIMARY KEY,
+      revision_id TEXT NOT NULL DEFAULT '',
+      store_number TEXT NOT NULL DEFAULT '',
+      user_name TEXT NOT NULL DEFAULT '',
+      device_name TEXT NOT NULL DEFAULT '',
+      user_agent TEXT NOT NULL DEFAULT '',
+      ip TEXT NOT NULL DEFAULT '',
+      last_action TEXT NOT NULL DEFAULT '',
+      last_seen TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+      connected_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+    )",
+    [],
+  )?;
+
   let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_inv_loc ON inventory_items(location)", []);
   let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_inv_sku ON inventory_items(sku)", []);
   let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_mti_task ON mobile_task_items(task_name)", []);
@@ -188,8 +204,143 @@ fn ensure_mobile_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
   let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_cat_bc ON store_catalog(barcode)", []);
   let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_stock_sku ON store_stock(sku)", []);
   let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_proc_scans ON processed_client_scans(client_scan_id)", []);
+  let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_active_clients_rev ON active_clients(revision_id, store_number)", []);
 
   Ok(())
+}
+
+fn touch_client_action(conn: &Connection, revision_id: &str, user_name: &str, device_name: &str, action: &str) {
+  if user_name.trim().is_empty() && device_name.trim().is_empty() {
+    return;
+  }
+  let _ = conn.execute(
+    "UPDATE active_clients 
+     SET last_action = ?1, last_seen = datetime('now', 'localtime')
+     WHERE (revision_id = ?2 OR revision_id = '' OR revision_id = 'default')
+       AND (user_name = ?3 OR device_name = ?4)",
+    params![action, revision_id, user_name, device_name],
+  );
+}
+
+#[derive(Serialize)]
+pub struct ConnectedClientDto {
+  pub client_id: String,
+  pub revision_id: String,
+  pub store_number: String,
+  pub user_name: String,
+  pub device_name: String,
+  pub user_agent: String,
+  pub ip: String,
+  pub last_action: String,
+  pub last_seen: String,
+  pub connected_at: String,
+  pub seconds_ago: i64,
+  pub status: String,
+}
+
+fn heartbeat_client(
+  db_path: &Path,
+  client_id: &str,
+  revision_id: &str,
+  store_number: &str,
+  user_name: &str,
+  device_name: &str,
+  user_agent: &str,
+  ip: &str,
+  last_action: &str,
+) -> Result<(), String> {
+  let conn = open_db(db_path)?;
+  let _ = ensure_mobile_tables(&conn);
+
+  let clean_id = client_id.trim();
+  if clean_id.is_empty() {
+    return Ok(());
+  }
+
+  let final_user = if user_name.trim().is_empty() {
+    if device_name.trim().is_empty() { "Ревизор".to_string() } else { format!("Ревизор ({})", device_name.trim()) }
+  } else {
+    user_name.trim().to_string()
+  };
+
+  conn.execute(
+    "INSERT INTO active_clients (client_id, revision_id, store_number, user_name, device_name, user_agent, ip, last_action, last_seen, connected_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now', 'localtime'), datetime('now', 'localtime'))
+     ON CONFLICT(client_id) DO UPDATE SET 
+       last_seen = datetime('now', 'localtime'),
+       revision_id = CASE WHEN ?2 != '' THEN ?2 ELSE revision_id END,
+       store_number = CASE WHEN ?3 != '' THEN ?3 ELSE store_number END,
+       user_name = CASE WHEN ?4 != '' THEN ?4 ELSE user_name END,
+       device_name = CASE WHEN ?5 != '' THEN ?5 ELSE device_name END,
+       user_agent = CASE WHEN ?6 != '' THEN ?6 ELSE user_agent END,
+       ip = CASE WHEN ?7 != '' THEN ?7 ELSE ip END,
+       last_action = CASE WHEN ?8 != '' THEN ?8 ELSE last_action END",
+    params![clean_id, revision_id, store_number, final_user, device_name, user_agent, ip, last_action],
+  ).map_err(|e| e.to_string())?;
+
+  let _ = conn.execute("DELETE FROM active_clients WHERE last_seen < datetime('now', '-48 hours', 'localtime')", []);
+
+  Ok(())
+}
+
+fn get_connected_clients(db_path: &Path, revision_id: &str, store_number: &str) -> Result<Vec<ConnectedClientDto>, String> {
+  let conn = open_db(db_path)?;
+  let _ = ensure_mobile_tables(&conn);
+
+  let mut stmt = conn.prepare(
+    "SELECT client_id, revision_id, store_number, user_name, device_name, user_agent, ip, last_action, last_seen, connected_at,
+            CAST((strftime('%s', 'now', 'localtime') - strftime('%s', last_seen)) AS INTEGER) as seconds_ago
+     FROM active_clients
+     WHERE (?1 = '' OR ?1 = 'default' OR revision_id = ?1 OR revision_id = '' OR revision_id = 'default')
+       AND (?2 = '' OR store_number = ?2 OR store_number = '')
+       AND last_seen >= datetime('now', '-6 hours', 'localtime')
+     ORDER BY last_seen DESC LIMIT 50"
+  ).map_err(|e| e.to_string())?;
+
+  let rows = stmt.query_map(params![revision_id, store_number], |r| {
+    let client_id: String = r.get(0)?;
+    let rev: String = r.get(1)?;
+    let store: String = r.get(2)?;
+    let user_name: String = r.get(3)?;
+    let device_name: String = r.get(4)?;
+    let user_agent: String = r.get(5)?;
+    let ip: String = r.get(6)?;
+    let last_action: String = r.get(7)?;
+    let last_seen: String = r.get(8)?;
+    let connected_at: String = r.get(9)?;
+    let seconds_ago: i64 = r.get(10).unwrap_or(0);
+
+    let status = if seconds_ago <= 40 {
+      "online".to_string()
+    } else if seconds_ago <= 240 {
+      "idle".to_string()
+    } else {
+      "offline".to_string()
+    };
+
+    Ok(ConnectedClientDto {
+      client_id,
+      revision_id: rev,
+      store_number: store,
+      user_name,
+      device_name,
+      user_agent,
+      ip,
+      last_action,
+      last_seen,
+      connected_at,
+      seconds_ago,
+      status,
+    })
+  }).map_err(|e| e.to_string())?;
+
+  let mut list = Vec::new();
+  for row in rows {
+    if let Ok(c) = row {
+      list.push(c);
+    }
+  }
+  Ok(list)
 }
 
 fn record_sync_event(conn: &Connection, revision_id: &str, store_number: &str, event_type: &str, payload: &serde_json::Value) {
@@ -604,7 +755,7 @@ fn get_tasks(db_path: &Path, revision_id: &str) -> Result<Vec<TaskItemDto>, Stri
   Ok(list)
 }
 
-fn create_task(db_path: &Path, revision_id: &str, name: &str) -> Result<TaskItemDto, String> {
+fn create_task(db_path: &Path, revision_id: &str, name: &str, user_name: &str, device_name: &str) -> Result<TaskItemDto, String> {
   let conn = open_db(db_path)?;
   let _ = ensure_mobile_tables(&conn);
 
@@ -629,8 +780,12 @@ fn create_task(db_path: &Path, revision_id: &str, name: &str) -> Result<TaskItem
       "type": "task_created",
       "task": clean_name,
       "revision_id": revision_id,
+      "user_name": user_name,
+      "device_name": device_name,
     }),
   );
+
+  touch_client_action(&conn, revision_id, user_name, device_name, &format!("Создана задача «{}»", clean_name));
 
   Ok(TaskItemDto {
     id: clean_name.to_string(),
@@ -643,7 +798,7 @@ fn create_task(db_path: &Path, revision_id: &str, name: &str) -> Result<TaskItem
   })
 }
 
-fn delete_task(db_path: &Path, revision_id: &str, name: &str) -> Result<(), String> {
+fn delete_task(db_path: &Path, revision_id: &str, name: &str, user_name: &str, device_name: &str) -> Result<(), String> {
   let conn = open_db(db_path)?;
   let _ = ensure_mobile_tables(&conn);
   let clean_name = name.trim();
@@ -663,8 +818,12 @@ fn delete_task(db_path: &Path, revision_id: &str, name: &str) -> Result<(), Stri
       "type": "task_deleted",
       "task": clean_name,
       "revision_id": revision_id,
+      "user_name": user_name,
+      "device_name": device_name,
     }),
   );
+
+  touch_client_action(&conn, revision_id, user_name, device_name, &format!("Удалена задача «{}»", clean_name));
 
   Ok(())
 }
@@ -918,6 +1077,8 @@ fn scan_barcode(
   box_number: &str,
   allow_unknown: bool,
   client_scan_id: &str,
+  user_name: &str,
+  device_name: &str,
 ) -> Result<ScannedProductDto, String> {
   let conn = open_db(db_path)?;
   let _ = ensure_mobile_tables(&conn);
@@ -1084,8 +1245,12 @@ fn scan_barcode(
       "item_id": item_id,
       "revision_id": revision_id,
       "store_number": store_number,
+      "user_name": user_name,
+      "device_name": device_name,
     }),
   );
+
+  touch_client_action(&conn, revision_id, user_name, device_name, &format!("ШК {} (+{} шт.) → {}", found_sku, qty, clean_loc));
 
   Ok(ScannedProductDto {
     id: item_id,
@@ -1103,6 +1268,8 @@ fn scan_batch(
   revision_id: &str,
   store_number: &str,
   scans: Vec<serde_json::Value>,
+  batch_user_name: &str,
+  batch_device_name: &str,
 ) -> Result<serde_json::Value, String> {
   let mut results = Vec::new();
   for s in scans {
@@ -1114,8 +1281,10 @@ fn scan_batch(
     let client_scan_id = s.get("client_scan_id").and_then(|v| v.as_str()).unwrap_or("");
     let rev = s.get("revision_id").and_then(|v| v.as_str()).unwrap_or(revision_id);
     let store = s.get("store_number").and_then(|v| v.as_str()).unwrap_or(store_number);
+    let u_name = s.get("user_name").and_then(|v| v.as_str()).unwrap_or(batch_user_name);
+    let d_name = s.get("device_name").and_then(|v| v.as_str()).unwrap_or(batch_device_name);
 
-    match scan_barcode(db_path, rev, store, location, barcode, qty, box_number, allow_unknown, client_scan_id) {
+    match scan_barcode(db_path, rev, store, location, barcode, qty, box_number, allow_unknown, client_scan_id, u_name, d_name) {
       Ok(res) => {
         results.push(json!({ "success": true, "client_scan_id": client_scan_id, "item": res }));
       }
@@ -1132,7 +1301,7 @@ fn scan_batch(
   }))
 }
 
-fn update_item_box(db_path: &Path, revision_id: &str, item_id: &str, box_number: &str, location: &str) -> Result<(), String> {
+fn update_item_box(db_path: &Path, revision_id: &str, item_id: &str, box_number: &str, location: &str, user_name: &str, device_name: &str) -> Result<(), String> {
   let conn = open_db(db_path)?;
   let clean_box = box_number.trim();
   conn.execute("UPDATE inventory_items SET box_number = ?1, updated_at = datetime('now', 'localtime') WHERE id = ?2", params![clean_box, item_id])
@@ -1153,13 +1322,17 @@ fn update_item_box(db_path: &Path, revision_id: &str, item_id: &str, box_number:
       "box_number": clean_box,
       "location": clean_loc,
       "revision_id": revision_id,
+      "user_name": user_name,
+      "device_name": device_name,
     }),
   );
+
+  touch_client_action(&conn, revision_id, user_name, device_name, &format!("№ коробки {} ({})", clean_box, clean_loc));
 
   Ok(())
 }
 
-fn update_item_qty(db_path: &Path, revision_id: &str, item_id: &str, new_qty: i64, location: &str) -> Result<(), String> {
+fn update_item_qty(db_path: &Path, revision_id: &str, item_id: &str, new_qty: i64, location: &str, user_name: &str, device_name: &str) -> Result<(), String> {
   let conn = open_db(db_path)?;
   if new_qty <= 0 {
     conn.execute("DELETE FROM inventory_items WHERE id = ?1", params![item_id])
@@ -1184,13 +1357,17 @@ fn update_item_qty(db_path: &Path, revision_id: &str, item_id: &str, new_qty: i6
       "quantity": new_qty,
       "location": clean_loc,
       "revision_id": revision_id,
+      "user_name": user_name,
+      "device_name": device_name,
     }),
   );
+
+  touch_client_action(&conn, revision_id, user_name, device_name, &format!("Кол-во {} шт. ({})", new_qty, clean_loc));
 
   Ok(())
 }
 
-fn complete_task(db_path: &Path, revision_id: &str, store_number: &str, name: &str) -> Result<TaskCompleteResultDto, String> {
+fn complete_task(db_path: &Path, revision_id: &str, store_number: &str, name: &str, user_name: &str, device_name: &str) -> Result<TaskCompleteResultDto, String> {
   let conn = open_db(db_path)?;
   let clean_name = name.trim();
   let _ = flush_draft_items(&conn, clean_name, revision_id, store_number);
@@ -1219,8 +1396,12 @@ fn complete_task(db_path: &Path, revision_id: &str, store_number: &str, name: &s
       "items_count": items_count,
       "total_qty": total_qty,
       "revision_id": revision_id,
+      "user_name": user_name,
+      "device_name": device_name,
     }),
   );
+
+  touch_client_action(&conn, revision_id, user_name, device_name, &format!("Завершена задача «{}» ({} шт.)", clean_name, total_qty));
 
   Ok(TaskCompleteResultDto {
     success: true,
@@ -1479,8 +1660,10 @@ fn main() {
         let _ = request.as_reader().read_to_string(&mut body);
         let val: serde_json::Value = serde_json::from_str(&body).unwrap_or(json!({}));
         let task_name = val.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let user_name = val.get("user_name").and_then(|v| v.as_str()).unwrap_or("");
+        let device_name = val.get("device_name").and_then(|v| v.as_str()).unwrap_or("");
 
-        match create_task(&db_path, &active_rev, task_name) {
+        match create_task(&db_path, &active_rev, task_name, user_name, device_name) {
           Ok(task) => {
             println!("📋 Создана задача: {}", task_name);
             let _ = request.respond(respond_json(&json!({ "success": true, "task": task }), 200));
@@ -1496,8 +1679,10 @@ fn main() {
         let _ = request.as_reader().read_to_string(&mut body);
         let val: serde_json::Value = serde_json::from_str(&body).unwrap_or(json!({}));
         let task_name = val.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let user_name = val.get("user_name").and_then(|v| v.as_str()).unwrap_or("");
+        let device_name = val.get("device_name").and_then(|v| v.as_str()).unwrap_or("");
 
-        match delete_task(&db_path, &active_rev, task_name) {
+        match delete_task(&db_path, &active_rev, task_name, user_name, device_name) {
           Ok(_) => {
             println!("🗑️  Удалена задача: {}", task_name);
             let _ = request.respond(respond_json(&json!({ "success": true }), 200));
@@ -1539,8 +1724,10 @@ fn main() {
         let client_scan_id = val.get("client_scan_id").and_then(|v| v.as_str()).unwrap_or("");
         let rev = val.get("revision_id").and_then(|v| v.as_str()).unwrap_or(&active_rev);
         let store = val.get("store_number").and_then(|v| v.as_str()).unwrap_or(&active_store);
+        let user_name = val.get("user_name").and_then(|v| v.as_str()).unwrap_or("");
+        let device_name = val.get("device_name").and_then(|v| v.as_str()).unwrap_or("");
 
-        match scan_barcode(&db_path, rev, store, location, barcode, qty, box_number, allow_unknown, client_scan_id) {
+        match scan_barcode(&db_path, rev, store, location, barcode, qty, box_number, allow_unknown, client_scan_id, user_name, device_name) {
           Ok(item) => {
             println!("🔍 Отсканирован: {} ({} шт.) → {}", item.name, qty, location);
             let _ = request.respond(respond_json(&json!({ "success": true, "item": item }), 200));
@@ -1556,8 +1743,10 @@ fn main() {
         let _ = request.as_reader().read_to_string(&mut body);
         let val: serde_json::Value = serde_json::from_str(&body).unwrap_or(json!({}));
         let scans = val.get("scans").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let batch_user_name = val.get("user_name").and_then(|v| v.as_str()).unwrap_or("");
+        let batch_device_name = val.get("device_name").and_then(|v| v.as_str()).unwrap_or("");
 
-        match scan_batch(&db_path, &active_rev, &active_store, scans) {
+        match scan_batch(&db_path, &active_rev, &active_store, scans, batch_user_name, batch_device_name) {
           Ok(res) => {
             let _ = request.respond(respond_json(&res, 200));
           }
@@ -1572,8 +1761,10 @@ fn main() {
         let _ = request.as_reader().read_to_string(&mut body);
         let val: serde_json::Value = serde_json::from_str(&body).unwrap_or(json!({}));
         let task_name = val.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let user_name = val.get("user_name").and_then(|v| v.as_str()).unwrap_or("");
+        let device_name = val.get("device_name").and_then(|v| v.as_str()).unwrap_or("");
 
-        match complete_task(&db_path, &active_rev, &active_store, task_name) {
+        match complete_task(&db_path, &active_rev, &active_store, task_name, user_name, device_name) {
           Ok(res) => {
             println!("🏁 Задача «{}» завершена: {} позиций ({} шт.)", res.task, res.items_count, res.total_qty);
             let _ = request.respond(respond_json(&json!({
@@ -1595,9 +1786,11 @@ fn main() {
         let val: serde_json::Value = serde_json::from_str(&body).unwrap_or(json!({}));
         let item_id = val.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let location = val.get("location").and_then(|v| v.as_str()).unwrap_or("");
+        let user_name = val.get("user_name").and_then(|v| v.as_str()).unwrap_or("");
+        let device_name = val.get("device_name").and_then(|v| v.as_str()).unwrap_or("");
 
         if let Some(box_num) = val.get("box_number").and_then(|v| v.as_str()) {
-          match update_item_box(&db_path, &active_rev, item_id, box_num, location) {
+          match update_item_box(&db_path, &active_rev, item_id, box_num, location, user_name, device_name) {
             Ok(_) => {
               let _ = request.respond(respond_json(&json!({ "success": true }), 200));
             }
@@ -1607,13 +1800,58 @@ fn main() {
           }
         } else {
           let new_qty = val.get("quantity").and_then(|v| v.as_i64()).unwrap_or(0);
-          match update_item_qty(&db_path, &active_rev, item_id, new_qty, location) {
+          match update_item_qty(&db_path, &active_rev, item_id, new_qty, location, user_name, device_name) {
             Ok(_) => {
               let _ = request.respond(respond_json(&json!({ "success": true }), 200));
             }
             Err(e) => {
               let _ = request.respond(respond_json(&json!({ "success": false, "error": e }), 400));
             }
+          }
+        }
+      }
+
+      (Method::Post, "/api/heartbeat") => {
+        let mut body = String::new();
+        let _ = request.as_reader().read_to_string(&mut body);
+        let val: serde_json::Value = serde_json::from_str(&body).unwrap_or(json!({}));
+        let client_id = val.get("client_id").and_then(|v| v.as_str()).unwrap_or("");
+        let rev = val.get("revision_id").and_then(|v| v.as_str()).unwrap_or(&active_rev);
+        let store = val.get("store_number").and_then(|v| v.as_str()).unwrap_or(&active_store);
+        let user_name = val.get("user_name").and_then(|v| v.as_str()).unwrap_or("");
+        let device_name = val.get("device_name").and_then(|v| v.as_str()).unwrap_or("");
+        let last_action = val.get("last_action").and_then(|v| v.as_str()).unwrap_or("В сети");
+
+        let client_ip = request.headers().iter()
+          .find(|h| h.field.equiv("x-forwarded-for"))
+          .map(|h| h.value.as_str().split(',').next().unwrap_or("").trim().to_string())
+          .or_else(|| request.remote_addr().map(|a| a.ip().to_string()))
+          .unwrap_or_else(|| "127.0.0.1".to_string());
+
+        let user_agent = request.headers().iter()
+          .find(|h| h.field.equiv("user-agent"))
+          .map(|h| h.value.as_str().to_string())
+          .unwrap_or_default();
+
+        match heartbeat_client(&db_path, client_id, rev, store, user_name, device_name, &user_agent, &client_ip, last_action) {
+          Ok(_) => {
+            let _ = request.respond(respond_json(&json!({ "success": true }), 200));
+          }
+          Err(e) => {
+            let _ = request.respond(respond_json(&json!({ "success": false, "error": e }), 500));
+          }
+        }
+      }
+
+      (Method::Get, "/api/clients") => {
+        let rev = query_map.get("rev").map(|s| s.as_str()).unwrap_or(&active_rev);
+        let store = query_map.get("store").map(|s| s.as_str()).unwrap_or(&active_store);
+        match get_connected_clients(&db_path, rev, store) {
+          Ok(clients) => {
+            let _ = request.respond(respond_json(&json!({ "success": true, "clients": clients }), 200));
+          }
+          Err(e) => {
+            let _ = request.respond(respond_json(&json!({ "success": false, "error": e }), 500));
           }
         }
       }

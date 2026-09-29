@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { eventBus } from '@shared/lib/eventBus'
 import { useInventoryStore } from './useInventoryStore'
 
@@ -14,11 +14,32 @@ export interface MobileServerInfo {
   last_scanned: string | null
 }
 
+export interface ConnectedClient {
+  client_id: string
+  revision_id: string
+  store_number: string
+  user_name: string
+  device_name: string
+  user_agent: string
+  ip: string
+  last_action: string
+  last_seen: string
+  connected_at: string
+  seconds_ago: number
+  status: 'online' | 'idle' | 'offline'
+}
+
 export interface MobileSyncActivity {
   id: string
   time: string
   text: string
-  type: 'scan' | 'task' | 'connect'
+  type: 'scan' | 'task' | 'update' | 'connect'
+  userName?: string
+  deviceName?: string
+  sku?: string
+  qty?: number
+  location?: string
+  boxNumber?: string
 }
 
 const serverInfo = ref<MobileServerInfo>({
@@ -35,25 +56,74 @@ const isServerRunning = ref(false)
 const isVdsOnline = ref(false)
 const isSyncing = ref(false)
 const recentActivities = ref<MobileSyncActivity[]>([])
+const connectedClients = ref<ConnectedClient[]>([])
 
 let pollInterval: ReturnType<typeof setInterval> | null = null
 let lastEventId = 0
 let activeSyncRevId = ''
 
-function pushActivity(text: string, type: 'scan' | 'task' | 'connect') {
-  const now = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+function loadSavedActivities(revisionId: string) {
+  if (!revisionId) return
+  try {
+    const raw = localStorage.getItem(`revizor_vds_activities_${revisionId}`)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) {
+        recentActivities.value = parsed
+        return
+      }
+    }
+  } catch (_) {}
+  recentActivities.value = []
+}
+
+function saveActivities(revisionId: string) {
+  if (!revisionId) return
+  try {
+    localStorage.setItem(
+      `revizor_vds_activities_${revisionId}`,
+      JSON.stringify(recentActivities.value.slice(0, 300))
+    )
+  } catch (_) {}
+}
+
+function pushActivity(
+  text: string,
+  type: 'scan' | 'task' | 'update' | 'connect',
+  extra?: {
+    userName?: string
+    deviceName?: string
+    sku?: string
+    qty?: number
+    location?: string
+    boxNumber?: string
+    time?: string
+  },
+  revisionId?: string
+) {
+  const timeStr = extra?.time || new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
   const last = recentActivities.value[0]
-  if (last && last.text === text && last.type === type) {
+  if (last && last.text === text && last.type === type && last.userName === extra?.userName) {
     return
   }
   recentActivities.value.unshift({
-    id: `act_${Date.now()}_${Math.random()}`,
-    time: now,
+    id: `act_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    time: timeStr,
     text,
     type,
+    userName: extra?.userName,
+    deviceName: extra?.deviceName,
+    sku: extra?.sku,
+    qty: extra?.qty,
+    location: extra?.location,
+    boxNumber: extra?.boxNumber,
   })
-  if (recentActivities.value.length > 2000) {
+  if (recentActivities.value.length > 500) {
     recentActivities.value.pop()
+  }
+  const rev = revisionId || activeSyncRevId
+  if (rev) {
+    saveActivities(rev)
   }
 }
 
@@ -126,9 +196,32 @@ export function useMobileSync() {
     }
   }
 
+  let clientPollCounter = 0
+
+  async function fetchConnectedClients(revisionId: string, storeNumber: string) {
+    if (!revisionId) return
+    try {
+      const resp = await fetch(
+        `${VDS_BASE_URL}/api/clients?rev=${encodeURIComponent(revisionId)}&store=${encodeURIComponent(storeNumber)}`,
+        { signal: AbortSignal.timeout(3500) }
+      )
+      if (resp.ok) {
+        const data = await resp.json()
+        if (data.success && Array.isArray(data.clients)) {
+          connectedClients.value = data.clients
+        }
+      }
+    } catch (_) {}
+  }
+
   async function pollEvents(revisionId: string, storeNumber: string) {
     if (!revisionId) return
     try {
+      clientPollCounter++
+      if (clientPollCounter % 2 === 1) {
+        fetchConnectedClients(revisionId, storeNumber).catch(() => {})
+      }
+
       const url = `${VDS_BASE_URL}/api/sync/events?rev=${encodeURIComponent(revisionId)}&store=${encodeURIComponent(storeNumber)}&after=${lastEventId}`
       const resp = await fetch(url, { signal: AbortSignal.timeout(4000) })
       if (!resp.ok) {
@@ -146,16 +239,28 @@ export function useMobileSync() {
         const payload = ev.payload
         if (!payload) continue
 
+        const userName = payload.user_name || payload.device_name || 'Телефон'
+        const timeStr = ev.created_at ? ev.created_at.slice(11, 19) : undefined
+
         if (ev.event_type === 'item_scanned') {
           const qty = payload.add_qty || 1
           const boxPart = payload.box_number?.trim() ? `, № коробки: ${payload.box_number.trim()}` : ''
           const locPart = payload.location ? `"${payload.location}"` : 'без локации'
-          const desc = `ШК ${payload.barcode || payload.sku} → ${locPart}${boxPart} (+${qty} шт.)`
-          pushActivity(desc, 'scan')
+          const namePart = payload.name && payload.name !== 'Н/Д' ? ` · «${payload.name}»` : ''
+          const desc = `ШК ${payload.barcode || payload.sku}${namePart} → ${locPart}${boxPart} (+${qty} шт.)`
+          pushActivity(desc, 'scan', {
+            userName,
+            deviceName: payload.device_name,
+            sku: payload.sku,
+            qty,
+            location: payload.location,
+            boxNumber: payload.box_number,
+            time: timeStr,
+          }, revisionId)
 
           eventBus.emit('app:toast', {
             type: 'success',
-            message: `📱 С телефона: ${desc}`,
+            message: `📱 ${userName}: ${desc}`,
           })
 
           await store.applyMobileScan(
@@ -172,11 +277,17 @@ export function useMobileSync() {
           await store.loadItems()
         } else if (ev.event_type === 'item_updated') {
           const qty = payload.quantity
-          const desc = `Кол-во: ${qty} шт.`
-          pushActivity(desc, 'scan')
+          const desc = `Изменено количество: ${qty} шт. (${payload.location || ''})`
+          pushActivity(desc, 'update', {
+            userName,
+            deviceName: payload.device_name,
+            qty,
+            location: payload.location,
+            time: timeStr,
+          }, revisionId)
           eventBus.emit('app:toast', {
             type: 'info',
-            message: `📱 С телефона: ${desc}`,
+            message: `📱 ${userName}: ${desc}`,
           })
           if (payload.item_id) {
             await store.applyMobileItemUpdate(payload.item_id, qty, revisionId)
@@ -185,10 +296,16 @@ export function useMobileSync() {
         } else if (ev.event_type === 'box_updated') {
           const box = payload.box_number || '—'
           const desc = `№ коробки: ${box} (${payload.location || ''})`
-          pushActivity(desc, 'scan')
+          pushActivity(desc, 'update', {
+            userName,
+            deviceName: payload.device_name,
+            location: payload.location,
+            boxNumber: payload.box_number,
+            time: timeStr,
+          }, revisionId)
           eventBus.emit('app:toast', {
             type: 'info',
-            message: `📱 С телефона: ${desc}`,
+            message: `📱 ${userName}: ${desc}`,
           })
           if (payload.item_id) {
             await store.applyMobileBoxUpdate(payload.item_id, payload.box_number, revisionId)
@@ -196,29 +313,45 @@ export function useMobileSync() {
           }
         } else if (ev.event_type === 'task_created') {
           const desc = `Создана локация: "${payload.task}"`
-          pushActivity(desc, 'task')
+          pushActivity(desc, 'task', {
+            userName,
+            deviceName: payload.device_name,
+            location: payload.task,
+            time: timeStr,
+          }, revisionId)
           eventBus.emit('app:toast', {
             type: 'info',
-            message: `📱 ${desc}`,
+            message: `📱 ${userName}: ${desc}`,
           })
           await store.loadItems()
         } else if (ev.event_type === 'task_completed') {
           const count = payload.items_count || 0
           const qty = payload.total_qty || 0
           const desc = `Завершена задача "${payload.task}": передано ${count} поз. (${qty} шт.)`
-          pushActivity(desc, 'task')
+          pushActivity(desc, 'task', {
+            userName,
+            deviceName: payload.device_name,
+            location: payload.task,
+            qty,
+            time: timeStr,
+          }, revisionId)
           eventBus.emit('app:toast', {
             type: 'success',
-            message: `📱 ${desc}`,
+            message: `📱 ${userName}: ${desc}`,
           })
           await store.loadItems()
           await store.loadAllStoreData()
         } else if (ev.event_type === 'task_deleted') {
           const desc = `Удалена локация: "${payload.task}"`
-          pushActivity(desc, 'task')
+          pushActivity(desc, 'task', {
+            userName,
+            deviceName: payload.device_name,
+            location: payload.task,
+            time: timeStr,
+          }, revisionId)
           eventBus.emit('app:toast', {
             type: 'info',
-            message: `📱 ${desc}`,
+            message: `📱 ${userName}: ${desc}`,
           })
           await store.loadItems()
         }
@@ -244,7 +377,10 @@ export function useMobileSync() {
       activeSyncRevId = revisionId
       const saved = localStorage.getItem(`revizor_vds_last_id_${revisionId}`)
       lastEventId = saved ? parseInt(saved, 10) || 0 : 0
+      loadSavedActivities(revisionId)
     }
+
+    fetchConnectedClients(revisionId, storeNumber).catch(() => {})
 
     if (!skipUpload) {
       // Первичная выгрузка данных на VDS при открытии QR-модалки
@@ -276,6 +412,11 @@ export function useMobileSync() {
 
   function clearActivities() {
     recentActivities.value = []
+    if (activeSyncRevId) {
+      try {
+        localStorage.removeItem(`revizor_vds_activities_${activeSyncRevId}`)
+      } catch (_) {}
+    }
   }
 
   function copyActivitiesToClipboard(): boolean {
@@ -311,12 +452,19 @@ export function useMobileSync() {
     }
   }
 
+  const onlineClientsCount = computed(() => {
+    return connectedClients.value.filter((c) => c.status === 'online').length
+  })
+
   return {
     serverInfo,
     isServerRunning,
     isVdsOnline,
     isSyncing,
     recentActivities,
+    connectedClients,
+    onlineClientsCount,
+    fetchConnectedClients,
     startServer,
     checkServerStatus,
     uploadDataToVds,
