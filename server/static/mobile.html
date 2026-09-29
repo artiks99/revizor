@@ -1379,9 +1379,33 @@
       } catch (_) {}
     }
 
+    function sendDisconnectBeacon() {
+      try {
+        const payload = JSON.stringify({
+          client_id: clientId,
+          revision_id: activeRevisionId,
+          store_number: activeStoreNumber,
+        });
+        if (navigator.sendBeacon) {
+          const blob = new Blob([payload], { type: 'application/json' });
+          navigator.sendBeacon('/api/disconnect', blob);
+        } else {
+          fetch('/api/disconnect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: payload,
+            keepalive: true,
+          }).catch(() => {});
+        }
+      } catch (_) {}
+    }
+
+    window.addEventListener('pagehide', sendDisconnectBeacon);
+    window.addEventListener('beforeunload', sendDisconnectBeacon);
+
     setInterval(() => {
       if (isServerOnline) sendHeartbeat();
-    }, 8000);
+    }, 6000);
 
     function prepareApiUrl(url) {
       try {

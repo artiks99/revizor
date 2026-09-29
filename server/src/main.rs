@@ -283,9 +283,23 @@ fn heartbeat_client(
   Ok(())
 }
 
+fn disconnect_client(db_path: &Path, client_id: &str) -> Result<(), String> {
+  let conn = open_db(db_path)?;
+  let _ = ensure_mobile_tables(&conn);
+  let clean_id = client_id.trim();
+  if clean_id.is_empty() {
+    return Ok(());
+  }
+  let _ = conn.execute("DELETE FROM active_clients WHERE client_id = ?1", params![clean_id]);
+  Ok(())
+}
+
 fn get_connected_clients(db_path: &Path, revision_id: &str, store_number: &str) -> Result<Vec<ConnectedClientDto>, String> {
   let conn = open_db(db_path)?;
   let _ = ensure_mobile_tables(&conn);
+
+  // Clean up any stale clients older than 15 minutes completely
+  let _ = conn.execute("DELETE FROM active_clients WHERE last_seen < datetime('now', '-15 minutes', 'localtime')", []);
 
   let mut stmt = conn.prepare(
     "SELECT client_id, revision_id, store_number, user_name, device_name, user_agent, ip, last_action, last_seen, connected_at,
@@ -293,7 +307,7 @@ fn get_connected_clients(db_path: &Path, revision_id: &str, store_number: &str) 
      FROM active_clients
      WHERE (?1 = '' OR ?1 = 'default' OR revision_id = ?1 OR revision_id = '' OR revision_id = 'default')
        AND (?2 = '' OR store_number = ?2 OR store_number = '')
-       AND last_seen >= datetime('now', '-6 hours', 'localtime')
+       AND last_seen >= datetime('now', '-5 minutes', 'localtime')
      ORDER BY last_seen DESC LIMIT 50"
   ).map_err(|e| e.to_string())?;
 
@@ -310,9 +324,9 @@ fn get_connected_clients(db_path: &Path, revision_id: &str, store_number: &str) 
     let connected_at: String = r.get(9)?;
     let seconds_ago: i64 = r.get(10).unwrap_or(0);
 
-    let status = if seconds_ago <= 40 {
+    let status = if seconds_ago <= 20 {
       "online".to_string()
-    } else if seconds_ago <= 240 {
+    } else if seconds_ago <= 70 {
       "idle".to_string()
     } else {
       "offline".to_string()
@@ -1841,6 +1855,15 @@ fn main() {
             let _ = request.respond(respond_json(&json!({ "success": false, "error": e }), 500));
           }
         }
+      }
+
+      (Method::Post, "/api/disconnect") => {
+        let mut body = String::new();
+        let _ = request.as_reader().read_to_string(&mut body);
+        let val: serde_json::Value = serde_json::from_str(&body).unwrap_or(json!({}));
+        let client_id = val.get("client_id").and_then(|v| v.as_str()).unwrap_or("");
+        let _ = disconnect_client(&db_path, client_id);
+        let _ = request.respond(respond_json(&json!({ "success": true }), 200));
       }
 
       (Method::Get, "/api/clients") => {

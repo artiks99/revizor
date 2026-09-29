@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref, computed } from 'vue'
 import type { ConnectedClient } from '../../../model/useMobileSync'
 
 const props = defineProps<{
@@ -9,6 +10,17 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'refresh'): void
 }>()
+
+const showOnlyOnline = ref(true)
+
+const onlineCount = computed(() => props.clients.filter((c) => c.status === 'online').length)
+
+const displayedClients = computed(() => {
+  if (showOnlyOnline.value) {
+    return props.clients.filter((c) => c.status === 'online')
+  }
+  return props.clients
+})
 
 function formatTimeAgo(seconds: number): string {
   if (seconds < 5) return 'только что'
@@ -30,45 +42,68 @@ function getDeviceIcon(device: string): string {
 
 <template>
   <div class="space-y-3">
-    <!-- Header with count and refresh -->
+    <!-- Header with count, filter and refresh -->
     <div class="flex items-center justify-between">
       <div class="flex items-center gap-2">
         <span class="text-xs font-semibold text-gray-200">Подключенные ревизоры</span>
-        <span
-          class="rounded-full px-2 py-0.5 text-[10px] font-bold"
-          :class="clients.length > 0 ? 'bg-indigo-500/20 text-indigo-300 ring-1 ring-indigo-500/40' : 'bg-gray-800 text-gray-400'"
+        <button
+          @click="showOnlyOnline = !showOnlyOnline"
+          type="button"
+          class="rounded-full px-2 py-0.5 text-[10px] font-bold transition-all cursor-pointer"
+          :class="showOnlyOnline ? 'bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40' : 'bg-gray-800 text-gray-400 hover:text-gray-200'"
+          title="Нажмите, чтобы переключить показ (только онлайн / все)"
         >
-          {{ clients.filter(c => c.status === 'online').length }} онлайн · всего {{ clients.length }}
-        </span>
+          {{ showOnlyOnline ? `В сети (${onlineCount})` : `Все (${clients.length})` }}
+        </button>
       </div>
 
-      <button
-        @click="emit('refresh')"
-        type="button"
-        class="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium text-gray-400 hover:bg-gray-800 hover:text-white transition-colors cursor-pointer"
-        title="Обновить список устройств"
-      >
-        <span>🔄</span>
-        <span>Обновить</span>
-      </button>
+      <div class="flex items-center gap-1.5">
+        <button
+          @click="showOnlyOnline = !showOnlyOnline"
+          type="button"
+          class="text-[11px] text-gray-400 hover:text-indigo-300 transition-colors cursor-pointer px-1.5 py-0.5"
+        >
+          {{ showOnlyOnline ? 'Показать всех' : 'Только в сети' }}
+        </button>
+
+        <button
+          @click="emit('refresh')"
+          type="button"
+          class="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium text-gray-400 hover:bg-gray-800 hover:text-white transition-colors cursor-pointer"
+          title="Обновить список устройств"
+        >
+          <span>🔄</span>
+          <span>Обновить</span>
+        </button>
+      </div>
     </div>
 
     <!-- Empty State -->
     <div
-      v-if="clients.length === 0"
+      v-if="displayedClients.length === 0"
       class="flex flex-col items-center justify-center rounded-xl border border-dashed border-gray-800 bg-gray-900/40 p-6 text-center"
     >
       <div class="text-3xl mb-2">👥</div>
-      <p class="text-xs font-semibold text-gray-300">Пока никто не подключен</p>
-      <p class="mt-1 text-[11px] text-gray-500 max-w-xs leading-relaxed">
-        Отсканируйте QR-код на вкладке «Подключение» камерой смартфона. Подключенные сотрудники отобразятся здесь.
+      <p class="text-xs font-semibold text-gray-300">
+        {{ showOnlyOnline ? 'Сейчас нет активных ревизоров в сети' : 'Список подключений пуст' }}
       </p>
+      <p class="mt-1 text-[11px] text-gray-500 max-w-xs leading-relaxed">
+        {{ showOnlyOnline ? 'Устройства, отключившиеся или закрывшие вкладку, скрыты фильтром.' : 'Отсканируйте QR-код на вкладке «Подключение» камерой смартфона.' }}
+      </p>
+      <button
+        v-if="showOnlyOnline && clients.length > 0"
+        @click="showOnlyOnline = false"
+        type="button"
+        class="mt-2 text-[11px] text-indigo-400 hover:underline cursor-pointer"
+      >
+        Показать недавние подключения ({{ clients.length }})
+      </button>
     </div>
 
     <!-- Clients list -->
     <div v-else class="space-y-2 max-h-[300px] overflow-y-auto pr-1">
       <div
-        v-for="client in clients"
+        v-for="client in displayedClients"
         :key="client.client_id"
         class="flex items-start justify-between rounded-xl border border-gray-800/80 bg-gray-900/70 p-3 transition-colors hover:border-gray-700/80"
       >
