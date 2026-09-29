@@ -726,11 +726,55 @@ fn flush_draft_items(conn: &Connection, task_name: &str, revision_id: &str, stor
   Ok(())
 }
 
+fn get_active_revision(conn: &rusqlite::Connection, requested_rev: &str) -> String {
+  let clean = requested_rev.trim();
+  if !clean.is_empty() {
+    return clean.to_string();
+  }
+  if let Ok(rev) = conn.query_row(
+    "SELECT revision_id FROM store_catalog WHERE revision_id != '' ORDER BY created_at DESC LIMIT 1",
+    [],
+    |r| r.get::<_, String>(0),
+  ) {
+    if !rev.trim().is_empty() {
+      return rev.trim().to_string();
+    }
+  }
+  if let Ok(rev) = conn.query_row(
+    "SELECT revision_id FROM inventory_items WHERE revision_id != '' ORDER BY created_at DESC LIMIT 1",
+    [],
+    |r| r.get::<_, String>(0),
+  ) {
+    if !rev.trim().is_empty() {
+      return rev.trim().to_string();
+    }
+  }
+  if let Ok(rev) = conn.query_row(
+    "SELECT revision_id FROM mobile_tasks WHERE revision_id != '' ORDER BY created_at DESC LIMIT 1",
+    [],
+    |r| r.get::<_, String>(0),
+  ) {
+    if !rev.trim().is_empty() {
+      return rev.trim().to_string();
+    }
+  }
+  if let Ok(rev) = conn.query_row(
+    "SELECT revision_id FROM store_stock WHERE revision_id != '' ORDER BY created_at DESC LIMIT 1",
+    [],
+    |r| r.get::<_, String>(0),
+  ) {
+    if !rev.trim().is_empty() {
+      return rev.trim().to_string();
+    }
+  }
+  String::new()
+}
+
 fn get_tasks(db_path: &Path, revision_id: &str) -> Result<Vec<TaskItemDto>, String> {
   let conn = open_db(db_path)?;
   let _ = ensure_mobile_tables(&conn);
 
-  let clean_rev = revision_id.trim();
+  let clean_rev = get_active_revision(&conn, revision_id);
   if clean_rev.is_empty() {
     return Ok(Vec::new());
   }
@@ -861,7 +905,7 @@ fn create_task(db_path: &Path, revision_id: &str, name: &str, user_name: &str, d
 fn delete_task(db_path: &Path, revision_id: &str, name: &str, user_name: &str, device_name: &str) -> Result<(), String> {
   let conn = open_db(db_path)?;
   let _ = ensure_mobile_tables(&conn);
-  let clean_rev = revision_id.trim();
+  let clean_rev = get_active_revision(&conn, revision_id);
   let clean_name = name.trim();
   if clean_rev.is_empty() {
     return Err("Не указан идентификатор ревизии (revision_id)".to_string());
@@ -876,7 +920,7 @@ fn delete_task(db_path: &Path, revision_id: &str, name: &str, user_name: &str, d
 
   record_sync_event(
     &conn,
-    clean_rev,
+    &clean_rev,
     "",
     "task_deleted",
     &json!({
@@ -888,7 +932,7 @@ fn delete_task(db_path: &Path, revision_id: &str, name: &str, user_name: &str, d
     }),
   );
 
-  touch_client_action(&conn, clean_rev, user_name, device_name, &format!("Удалена задача «{}»", clean_name));
+  touch_client_action(&conn, &clean_rev, user_name, device_name, &format!("Удалена задача «{}»", clean_name));
 
   Ok(())
 }
@@ -902,12 +946,12 @@ fn get_task_items(
   let conn = open_db(db_path)?;
   let _ = ensure_mobile_tables(&conn);
   let clean_loc = location.trim();
-  let clean_rev = revision_id.trim();
+  let clean_rev = get_active_revision(&conn, revision_id);
   if clean_rev.is_empty() {
     return Ok(("in_progress".to_string(), Vec::new()));
   }
 
-  let _ = flush_draft_items(&conn, clean_loc, clean_rev, store_number);
+  let _ = flush_draft_items(&conn, clean_loc, &clean_rev, store_number);
 
   let status: String = conn.query_row(
     "SELECT status FROM mobile_tasks WHERE name = ?1 AND revision_id = ?2 LIMIT 1",
@@ -968,21 +1012,32 @@ fn get_task_items(
 fn search_catalog(db_path: &Path, query: &str, revision_id: &str) -> Result<Vec<CatalogSuggestionDto>, String> {
   let conn = open_db(db_path)?;
   let q = query.trim();
-  let clean_rev = revision_id.trim();
-  if q.is_empty() || clean_rev.is_empty() {
+  if q.is_empty() {
     return Ok(Vec::new());
   }
+
+  let clean_rev = get_active_revision(&conn, revision_id);
 
   let catalog_exists: bool = conn
     .query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name='store_catalog'", [], |_| Ok(true))
     .unwrap_or(false);
 
-  if !catalog_exists {
+  let stock_exists: bool = conn
+    .query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name='store_stock'", [], |_| Ok(true))
+    .unwrap_or(false);
+
+  if !catalog_exists && !stock_exists {
     return Ok(Vec::new());
   }
 
-  let sql = "SELECT sku, name, COALESCE(barcode, '') as barcode FROM store_catalog
-     WHERE revision_id = ?2
+  let sql = if catalog_exists && stock_exists {
+    "WITH combined AS (
+       SELECT sku, name, COALESCE(barcode, '') as barcode, revision_id FROM store_catalog
+       UNION
+       SELECT sku, name, '' as barcode, revision_id FROM store_stock WHERE sku NOT IN (SELECT sku FROM store_catalog)
+     )
+     SELECT sku, name, barcode FROM combined
+     WHERE (length(?2) = 0 OR revision_id = ?2 OR revision_id = '')
        AND (sku LIKE ?1 || '%' 
          OR sku LIKE '%' || ?1 || '%' 
          OR barcode LIKE ?1 || '%' 
@@ -997,7 +1052,40 @@ fn search_catalog(db_path: &Path, query: &str, revision_id: &str) -> Result<Vec<
        END,
        LENGTH(sku) ASC,
        sku ASC
-     LIMIT 15";
+     LIMIT 15"
+  } else if catalog_exists {
+    "SELECT sku, name, COALESCE(barcode, '') as barcode FROM store_catalog
+     WHERE (length(?2) = 0 OR revision_id = ?2 OR revision_id = '')
+       AND (sku LIKE ?1 || '%' 
+         OR sku LIKE '%' || ?1 || '%' 
+         OR barcode LIKE ?1 || '%' 
+         OR barcode LIKE '%' || ?1 || '%')
+     ORDER BY 
+       CASE 
+         WHEN sku = ?1 THEN 1
+         WHEN sku LIKE ?1 || '%' THEN 2
+         WHEN barcode = ?1 THEN 3
+         WHEN barcode LIKE ?1 || '%' THEN 4
+         ELSE 5
+       END,
+       LENGTH(sku) ASC,
+       sku ASC
+     LIMIT 15"
+  } else {
+    "SELECT sku, name, '' as barcode FROM store_stock
+     WHERE (length(?2) = 0 OR revision_id = ?2 OR revision_id = '')
+       AND (sku LIKE ?1 || '%' 
+         OR sku LIKE '%' || ?1 || '%')
+     ORDER BY 
+       CASE 
+         WHEN sku = ?1 THEN 1
+         WHEN sku LIKE ?1 || '%' THEN 2
+         ELSE 3
+       END,
+       LENGTH(sku) ASC,
+       sku ASC
+     LIMIT 15"
+  };
 
   let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
   let rows = stmt.query_map(params![q, clean_rev], |row| {
@@ -1012,7 +1100,7 @@ fn search_catalog(db_path: &Path, query: &str, revision_id: &str) -> Result<Vec<
   for r in rows.flatten() {
     let mut dto = r;
     if !dto.barcode.is_empty() {
-      let first_bc = dto.barcode.split(',').next().unwrap_or("").trim().to_string();
+      let first_bc = dto.barcode.split([',', ';', '\n', '\r', '/', ' ']).next().unwrap_or("").trim().to_string();
       if first_bc != dto.sku {
         dto.barcode = first_bc;
       } else {
@@ -1027,10 +1115,10 @@ fn search_catalog(db_path: &Path, query: &str, revision_id: &str) -> Result<Vec<
 fn get_product_details(db_path: &Path, code: &str, revision_id: &str, _store_number: &str) -> Result<Option<ProductDetailDto>, String> {
   let conn = open_db(db_path)?;
   let clean_code = code.trim();
-  let clean_rev = revision_id.trim();
-  if clean_code.is_empty() || clean_rev.is_empty() {
+  if clean_code.is_empty() {
     return Ok(None);
   }
+  let clean_rev = get_active_revision(&conn, revision_id);
 
   let digits_only: String = clean_code.chars().filter(|c| c.is_ascii_digit()).collect();
   let unpadded_digits = digits_only.trim_start_matches('0').to_string();
@@ -1042,7 +1130,7 @@ fn get_product_details(db_path: &Path, code: &str, revision_id: &str, _store_num
   let catalog_lookup: Result<(String, String, String), _> = if catalog_exists {
     conn.query_row(
       "SELECT COALESCE(sku, ''), COALESCE(name, ''), COALESCE(barcode, '') FROM store_catalog 
-       WHERE revision_id = ?4
+       WHERE (length(?4) = 0 OR revision_id = ?4 OR revision_id = '')
          AND (TRIM(sku) = ?1 
           OR (length(?2) > 0 AND LTRIM(TRIM(sku), '0') = ?2)
           OR (length(?3) > 0 AND TRIM(sku) = ?3)
@@ -1079,7 +1167,42 @@ fn get_product_details(db_path: &Path, code: &str, revision_id: &str, _store_num
       let final_name = if n.trim().is_empty() { format!("Товар {}", s) } else { n };
       (s, final_name, bc_to_show)
     }
-    Err(_) => return Ok(None),
+    Err(_) => {
+      let stock_exists: bool = conn
+        .query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name='store_stock'", [], |_| Ok(true))
+        .unwrap_or(false);
+
+      if !stock_exists {
+        return Ok(None);
+      }
+
+      let stock_lookup: Result<(String, String), _> = conn.query_row(
+        "SELECT COALESCE(sku, ''), COALESCE(name, '') FROM store_stock 
+         WHERE (length(?4) = 0 OR revision_id = ?4 OR revision_id = '')
+           AND (TRIM(sku) = ?1 
+            OR (length(?2) > 0 AND LTRIM(TRIM(sku), '0') = ?2)
+            OR (length(?3) > 0 AND TRIM(sku) = ?3)
+            OR (length(?1) >= 3 AND sku LIKE ?1 || '%')
+            OR (length(?1) >= 4 AND sku LIKE '%' || ?1 || '%'))
+         ORDER BY 
+           CASE 
+             WHEN TRIM(sku) = ?1 THEN 1 
+             WHEN (length(?2) > 0 AND LTRIM(TRIM(sku), '0') = ?2) THEN 2 
+             ELSE 3 
+           END
+         LIMIT 1",
+        params![clean_code, unpadded_digits, digits_only, clean_rev],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+      );
+
+      match stock_lookup {
+        Ok((s, n)) => {
+          let final_name = if n.trim().is_empty() { format!("Товар {}", s) } else { n };
+          (s, final_name, clean_code.to_string())
+        }
+        Err(_) => return Ok(None),
+      }
+    }
   };
 
   let stock_exists: bool = conn
@@ -1088,7 +1211,10 @@ fn get_product_details(db_path: &Path, code: &str, revision_id: &str, _store_num
 
   let stock_qty: f64 = if stock_exists {
     conn.query_row(
-      "SELECT COALESCE(quantity, 0) FROM store_stock WHERE TRIM(sku) = ?1 AND revision_id = ?2 LIMIT 1",
+      "SELECT COALESCE(quantity, 0) FROM store_stock 
+       WHERE TRIM(sku) = ?1 
+         AND (length(?2) = 0 OR revision_id = ?2 OR revision_id = '') 
+       LIMIT 1",
       params![found_sku, clean_rev],
       |r| r.get(0),
     ).unwrap_or(0.0)
@@ -1103,7 +1229,7 @@ fn get_product_details(db_path: &Path, code: &str, revision_id: &str, _store_num
   let multiplicity: i64 = if mult_exists {
     conn.query_row(
       "SELECT COALESCE(multiplicity, 1) FROM store_multiplicity 
-       WHERE revision_id = ?4
+       WHERE (length(?4) = 0 OR revision_id = ?4 OR revision_id = '')
          AND (TRIM(sku) = ?1 
           OR TRIM(sku) = ?2
           OR (length(?3) > 0 AND LTRIM(TRIM(sku), '0') = ?3)
@@ -1131,7 +1257,7 @@ fn get_product_details(db_path: &Path, code: &str, revision_id: &str, _store_num
   if let Ok(mut stmt) = conn.prepare(
     "SELECT COALESCE(location, '') as loc, COALESCE(box_number, '') as box, SUM(quantity) as qty 
      FROM inventory_items 
-     WHERE TRIM(sku) = ?1 AND quantity > 0 AND revision_id = ?2 
+     WHERE TRIM(sku) = ?1 AND quantity > 0 AND (length(?2) = 0 OR revision_id = ?2 OR revision_id = '') 
      GROUP BY loc, box ORDER BY qty DESC"
   ) {
     if let Ok(rows) = stmt.query_map(params![found_sku, clean_rev], |r| {
@@ -1677,12 +1803,34 @@ fn main() {
       }
 
       (Method::Get, "/api/status") => {
+        let (eff_rev, eff_store) = if let Ok(conn) = open_db(&db_path) {
+          let rev = get_active_revision(&conn, &active_rev);
+          let store = if !active_store.is_empty() {
+            active_store.clone()
+          } else {
+            conn.query_row(
+              "SELECT store_number FROM inventory_items WHERE store_number != '' ORDER BY created_at DESC LIMIT 1",
+              [],
+              |r| r.get::<_, String>(0),
+            ).or_else(|_| {
+              conn.query_row(
+                "SELECT store_number FROM store_catalog WHERE store_number != '' ORDER BY created_at DESC LIMIT 1",
+                [],
+                |r| r.get::<_, String>(0),
+              )
+            }).unwrap_or_default()
+          };
+          (rev, store)
+        } else {
+          (active_rev.clone(), active_store.clone())
+        };
+
         let res = json!({
           "status": "ok",
           "is_running": true,
           "vds": true,
-          "revision_id": active_rev,
-          "store_number": active_store,
+          "revision_id": eff_rev,
+          "store_number": eff_store,
         });
         let _ = request.respond(respond_json(&res, 200));
       }
@@ -1699,7 +1847,7 @@ fn main() {
         };
         let res = json!({
           "status": "ok",
-          "version": "1.0.17",
+          "version": "1.0.24",
           "uptime_seconds": uptime,
           "db_size_bytes": db_size,
           "items_count": items_count,

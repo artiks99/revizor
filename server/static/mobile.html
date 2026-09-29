@@ -1311,6 +1311,19 @@
     let activeRevisionId = paramRev || localStorage.getItem('revizor_vds_rev') || '';
     let activeStoreNumber = paramStore || localStorage.getItem('revizor_vds_store') || '';
 
+    function apiUrl(path) {
+      const sep = path.includes('?') ? '&' : '?';
+      let url = path;
+      if (activeRevisionId && !url.includes('rev=')) {
+        url += sep + 'rev=' + encodeURIComponent(activeRevisionId);
+      }
+      if (activeStoreNumber && !url.includes('store=')) {
+        const s = url.includes('?') ? '&' : '?';
+        url += s + 'store=' + encodeURIComponent(activeStoreNumber);
+      }
+      return url;
+    }
+
     function getDeviceName() {
       const ua = navigator.userAgent;
       let dev = 'Смартфон';
@@ -1817,12 +1830,21 @@
       showToast('⏳ Синхронизация с компьютером...');
 
       try {
-        const res = await fetchWithTimeout('/api/status?t=' + Date.now(), { cache: 'no-store' }, 3000);
+        const res = await fetchWithTimeout(apiUrl('/api/status?t=' + Date.now()), { cache: 'no-store' }, 3000);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
         if (data.status === 'ok') {
           if (data.store_number) {
             cachedStoreInfo = 'Магазин №' + data.store_number;
+            if (!activeStoreNumber) {
+              activeStoreNumber = data.store_number;
+              localStorage.setItem('revizor_vds_store', activeStoreNumber);
+              updateStoreBadge();
+            }
+          }
+          if (data.revision_id && !activeRevisionId) {
+            activeRevisionId = data.revision_id;
+            localStorage.setItem('revizor_vds_rev', activeRevisionId);
           }
           setOnlineState(true);
 
@@ -1975,7 +1997,7 @@
 
     async function loadTasks() {
       try {
-        const res = await fetchWithTimeout('/api/tasks');
+        const res = await fetchWithTimeout(apiUrl('/api/tasks'));
         const data = await res.json();
         const container = document.getElementById('tasks-list');
         if (!data.success || !data.tasks || data.tasks.length === 0) {
@@ -2092,7 +2114,7 @@
     async function loadTaskItems() {
       if (!activeTask) return;
       try {
-        const res = await fetchWithTimeout('/api/task/items?location=' + encodeURIComponent(activeTask));
+        const res = await fetchWithTimeout(apiUrl('/api/task/items?location=' + encodeURIComponent(activeTask)));
         const data = await res.json();
         const container = document.getElementById('items-list');
 
@@ -2743,7 +2765,7 @@
       }
 
       try {
-        const checkRes = await fetchWithTimeout('/api/product/details?code=' + encodeURIComponent(barcode), {}, 4000);
+        const checkRes = await fetchWithTimeout(apiUrl('/api/product/details?code=' + encodeURIComponent(barcode)), {}, 4000);
         const checkData = await checkRes.json();
         if (checkData.success && checkData.found && checkData.product) {
           setOnlineState(true);
@@ -2995,7 +3017,7 @@
       }
 
       try {
-        const checkRes = await fetchWithTimeout('/api/product/details?code=' + encodeURIComponent(clean), {}, 4000);
+        const checkRes = await fetchWithTimeout(apiUrl('/api/product/details?code=' + encodeURIComponent(clean)), {}, 4000);
         const checkData = await checkRes.json();
         setOnlineState(true);
 
@@ -3375,7 +3397,7 @@
       }
       manualLkDebounceTimer = setTimeout(async () => {
         try {
-          const res = await fetchWithTimeout('/api/catalog/search?q=' + encodeURIComponent(q), {}, 3000);
+          const res = await fetchWithTimeout(apiUrl('/api/catalog/search?q=' + encodeURIComponent(q)), {}, 3000);
           const data = await res.json();
           if (!preview) return;
           if (data.success && data.items && data.items.length > 0) {
@@ -3496,7 +3518,7 @@
       currentSearchAbort = new AbortController();
 
       try {
-        const res = await fetch('/api/catalog/search?q=' + encodeURIComponent(q), {
+        const res = await fetch(apiUrl('/api/catalog/search?q=' + encodeURIComponent(q)), {
           signal: currentSearchAbort.signal
         });
         const data = await res.json();

@@ -531,10 +531,6 @@ fn search_catalog(db_path: &Path, query: &str) -> Result<Vec<CatalogSuggestionDt
     )
     .unwrap_or(false);
 
-  if !catalog_exists {
-    return Ok(Vec::new());
-  }
-
   let stock_exists: bool = conn
     .query_row(
       "SELECT 1 FROM sqlite_master WHERE type='table' AND name='store_stock'",
@@ -543,7 +539,11 @@ fn search_catalog(db_path: &Path, query: &str) -> Result<Vec<CatalogSuggestionDt
     )
     .unwrap_or(false);
 
-  let sql = if stock_exists {
+  if !catalog_exists && !stock_exists {
+    return Ok(Vec::new());
+  }
+
+  let sql = if catalog_exists && stock_exists {
     "WITH combined AS (
        SELECT sku, name, COALESCE(barcode, '') as barcode FROM store_catalog
        UNION
@@ -565,7 +565,7 @@ fn search_catalog(db_path: &Path, query: &str) -> Result<Vec<CatalogSuggestionDt
        LENGTH(sku) ASC,
        sku ASC
      LIMIT 15"
-  } else {
+  } else if catalog_exists {
     "SELECT sku, name, COALESCE(barcode, '') as barcode FROM store_catalog
      WHERE sku LIKE ?1 || '%' 
         OR sku LIKE '%' || ?1 || '%' 
@@ -578,6 +578,19 @@ fn search_catalog(db_path: &Path, query: &str) -> Result<Vec<CatalogSuggestionDt
          WHEN barcode = ?1 THEN 3
          WHEN barcode LIKE ?1 || '%' THEN 4
          ELSE 5
+       END,
+       LENGTH(sku) ASC,
+       sku ASC
+     LIMIT 15"
+  } else {
+    "SELECT sku, name, '' as barcode FROM store_stock
+     WHERE sku LIKE ?1 || '%' 
+        OR sku LIKE '%' || ?1 || '%'
+     ORDER BY 
+       CASE 
+         WHEN sku = ?1 THEN 1
+         WHEN sku LIKE ?1 || '%' THEN 2
+         ELSE 3
        END,
        LENGTH(sku) ASC,
        sku ASC
