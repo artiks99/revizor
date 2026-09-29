@@ -695,23 +695,29 @@ export const useInventoryStore = defineStore('inventory', () => {
     }
   }
 
-  async function applyMobileScan(item: { sku: string; name?: string; barcode?: string; addQty: number; location: string; boxNumber?: string }) {
-    if (!repo || !currentPartitionId.value) return
-    await repo.applyMobileScan(currentPartitionId.value, activeStoreNumber.value || '', item)
+  async function applyMobileScan(
+    item: { sku: string; name?: string; barcode?: string; addQty: number; location: string; boxNumber?: string },
+    targetRevId?: string
+  ) {
+    const revId = targetRevId || currentPartitionId.value
+    if (!repo || !revId) return
+    await repo.applyMobileScan(revId, activeStoreNumber.value || '', item)
     await loadItems()
     await loadAllStoreData()
   }
 
-  async function applyMobileItemUpdate(itemId: string, quantity: number) {
-    if (!repo || !currentPartitionId.value) return
-    await repo.applyMobileItemUpdate(currentPartitionId.value, itemId, quantity)
+  async function applyMobileItemUpdate(itemId: string, quantity: number, targetRevId?: string) {
+    const revId = targetRevId || currentPartitionId.value
+    if (!repo || !revId) return
+    await repo.applyMobileItemUpdate(revId, itemId, quantity)
     await loadItems()
     await loadAllStoreData()
   }
 
-  async function applyMobileBoxUpdate(itemId: string, boxNumber: string) {
-    if (!repo || !currentPartitionId.value) return
-    await repo.applyMobileBoxUpdate(currentPartitionId.value, itemId, boxNumber)
+  async function applyMobileBoxUpdate(itemId: string, boxNumber: string, targetRevId?: string) {
+    const revId = targetRevId || currentPartitionId.value
+    if (!repo || !revId) return
+    await repo.applyMobileBoxUpdate(revId, itemId, boxNumber)
     await loadItems()
     await loadAllStoreData()
   }

@@ -127,19 +127,22 @@ export function useMobileSync() {
   }
 
   async function pollEvents(revisionId: string, storeNumber: string) {
-    if (!isVdsOnline.value) return
+    if (!revisionId) return
     try {
       const url = `${VDS_BASE_URL}/api/sync/events?rev=${encodeURIComponent(revisionId)}&store=${encodeURIComponent(storeNumber)}&after=${lastEventId}`
-      const resp = await fetch(url, { signal: AbortSignal.timeout(3000) })
-      if (!resp.ok) return
+      const resp = await fetch(url, { signal: AbortSignal.timeout(4000) })
+      if (!resp.ok) {
+        isVdsOnline.value = false
+        return
+      }
+      isVdsOnline.value = true
+      isServerRunning.value = true
+      serverInfo.value.is_running = true
 
       const data = await resp.json()
       if (!data.success || !Array.isArray(data.events)) return
 
       for (const ev of data.events) {
-        if (ev.id > lastEventId) {
-          lastEventId = ev.id
-        }
         const payload = ev.payload
         if (!payload) continue
 
@@ -155,14 +158,17 @@ export function useMobileSync() {
             message: `📱 С телефона: ${desc}`,
           })
 
-          await store.applyMobileScan({
-            sku: payload.sku,
-            name: payload.name,
-            barcode: payload.barcode,
-            addQty: qty,
-            location: payload.location,
-            boxNumber: payload.box_number,
-          })
+          await store.applyMobileScan(
+            {
+              sku: payload.sku,
+              name: payload.name,
+              barcode: payload.barcode,
+              addQty: qty,
+              location: payload.location,
+              boxNumber: payload.box_number,
+            },
+            revisionId
+          )
           await store.loadItems()
         } else if (ev.event_type === 'item_updated') {
           const qty = payload.quantity
@@ -173,7 +179,7 @@ export function useMobileSync() {
             message: `📱 С телефона: ${desc}`,
           })
           if (payload.item_id) {
-            await store.applyMobileItemUpdate(payload.item_id, qty)
+            await store.applyMobileItemUpdate(payload.item_id, qty, revisionId)
             await store.loadItems()
           }
         } else if (ev.event_type === 'box_updated') {
@@ -185,7 +191,7 @@ export function useMobileSync() {
             message: `📱 С телефона: ${desc}`,
           })
           if (payload.item_id) {
-            await store.applyMobileBoxUpdate(payload.item_id, payload.box_number)
+            await store.applyMobileBoxUpdate(payload.item_id, payload.box_number, revisionId)
             await store.loadItems()
           }
         } else if (ev.event_type === 'task_created') {
@@ -216,25 +222,34 @@ export function useMobileSync() {
           })
           await store.loadItems()
         }
+
+        if (ev.id > lastEventId) {
+          lastEventId = ev.id
+          try {
+            localStorage.setItem(`revizor_vds_last_id_${revisionId}`, String(lastEventId))
+          } catch (_) {}
+        }
       }
     } catch (err) {
       console.warn('[useMobileSync] pollEvents error:', err)
     }
   }
 
-  async function startServer(revisionId: string, storeNumber: string, _dirPath?: string, _port = 443): Promise<MobileServerInfo> {
+  async function startServer(revisionId: string, storeNumber: string, _dirPath?: string, skipUpload = false): Promise<MobileServerInfo> {
     serverInfo.value.revision_id = revisionId
     serverInfo.value.store_number = storeNumber
     serverInfo.value.url = `${VDS_BASE_URL}/?store=${encodeURIComponent(storeNumber)}&rev=${encodeURIComponent(revisionId)}`
 
-    await checkServerStatus()
     if (activeSyncRevId !== revisionId) {
       activeSyncRevId = revisionId
-      lastEventId = 0
+      const saved = localStorage.getItem(`revizor_vds_last_id_${revisionId}`)
+      lastEventId = saved ? parseInt(saved, 10) || 0 : 0
     }
 
-    // Первичная выгрузка данных на VDS
-    await uploadDataToVds(revisionId, storeNumber)
+    if (!skipUpload) {
+      // Первичная выгрузка данных на VDS при открытии QR-модалки
+      uploadDataToVds(revisionId, storeNumber).catch(() => {})
+    }
 
     // Запуск фонового поллинга сканов
     if (pollInterval) {
@@ -242,7 +257,7 @@ export function useMobileSync() {
     }
     pollInterval = setInterval(() => {
       pollEvents(revisionId, storeNumber)
-    }, 1200)
+    }, 1500)
 
     // Первый опрос сразу
     pollEvents(revisionId, storeNumber)

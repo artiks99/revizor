@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useInventoryStore } from '../model/useInventoryStore'
 import { formatDateTime, formatDateOnly, formatDateRange } from '@shared/lib/formatDate'
@@ -18,7 +18,23 @@ import { useMobileSync } from '../model/useMobileSync'
 const route = useRoute()
 const router = useRouter()
 const store = useInventoryStore()
-useMobileSync()
+const { startServer, stopServer } = useMobileSync()
+
+watch(
+  () => store.activeRevision,
+  (rev) => {
+    if (rev && !rev.isArchived) {
+      startServer(rev.id, rev.storeNumber, rev.dirPath, true)
+    } else {
+      stopServer()
+    }
+  },
+  { immediate: true }
+)
+
+onUnmounted(() => {
+  stopServer()
+})
 
 onMounted(async () => {
   await initInventoryPage()

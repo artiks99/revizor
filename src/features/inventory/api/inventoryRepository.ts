@@ -1577,11 +1577,27 @@ export function createInventoryRepository(db: DatabaseProvider) {
           [cur.quantity + qty, cur.id]
         )
       } else {
+        let finalName = item.name?.trim() || ''
+        if (!finalName || finalName.startsWith('Товар ')) {
+          try {
+            const catRows = await revDb.select<{ name: string }>(
+              `SELECT name FROM ${CATALOG_TABLE} WHERE sku = $1 LIMIT 1`,
+              [cleanSku]
+            )
+            if (catRows.length > 0 && catRows[0].name) {
+              finalName = catRows[0].name
+            }
+          } catch (_) {}
+        }
+        if (!finalName) {
+          finalName = `Товар ${cleanSku}`
+        }
+
         const newId = `item_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
         await revDb.execute(
-          `INSERT INTO ${TABLE} (id, revision_id, store_number, name, sku, category, quantity, unit, location, box_number, status, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, $5, '', $6, 'шт.', $7, $8, 'ok', datetime('now'), datetime('now'))`,
-          [newId, revisionId, storeNumber, item.name || `Товар ${cleanSku}`, cleanSku, qty, cleanLoc, cleanBox]
+          `INSERT INTO ${TABLE} (id, name, sku, category, quantity, unit, location, box_number, status, created_at, updated_at)
+           VALUES ($1, $2, $3, '', $4, 'шт.', $5, $6, 'ok', datetime('now'), datetime('now'))`,
+          [newId, finalName, cleanSku, qty, cleanLoc, cleanBox]
         )
       }
     },
