@@ -308,6 +308,7 @@ export function useMobileSync() {
 
           await store.applyMobileScan(
             {
+              id: payload.item_id,
               sku: payload.sku,
               name: payload.name,
               barcode: payload.barcode,
@@ -332,8 +333,14 @@ export function useMobileSync() {
             type: 'info',
             message: `📱 ${userName}: ${desc}`,
           })
-          if (payload.item_id) {
-            await store.applyMobileItemUpdate(payload.item_id, qty, revisionId)
+          if (payload.item_id || (payload.location && payload.sku)) {
+            await store.applyMobileItemUpdate(
+              payload.item_id || '',
+              qty,
+              revisionId,
+              payload.location,
+              payload.sku
+            )
             hasItemChanges = true
           }
         } else if (ev.event_type === 'box_updated') {
@@ -350,8 +357,14 @@ export function useMobileSync() {
             type: 'info',
             message: `📱 ${userName}: ${desc}`,
           })
-          if (payload.item_id) {
-            await store.applyMobileBoxUpdate(payload.item_id, payload.box_number, revisionId)
+          if (payload.item_id || (payload.location && payload.sku)) {
+            await store.applyMobileBoxUpdate(
+              payload.item_id || '',
+              payload.box_number,
+              revisionId,
+              payload.location,
+              payload.sku
+            )
             hasItemChanges = true
           }
         } else if (ev.event_type === 'task_created') {

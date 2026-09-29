@@ -1581,25 +1581,68 @@ fn scan_batch(
   }))
 }
 
-fn update_item_box(db_path: &Path, revision_id: &str, item_id: &str, box_number: &str, location: &str, user_name: &str, device_name: &str) -> Result<(), String> {
+fn update_item_box(
+  db_path: &Path,
+  revision_id: &str,
+  item_id: &str,
+  box_number: &str,
+  location: &str,
+  sku: &str,
+  user_name: &str,
+  device_name: &str,
+) -> Result<(), String> {
   let conn = open_db(db_path)?;
-  let clean_rev = revision_id.trim();
+  let clean_rev = get_active_revision(&conn, revision_id);
   let clean_box = box_number.trim();
-  conn.execute("UPDATE inventory_items SET box_number = ?1, updated_at = datetime('now', 'localtime') WHERE id = ?2 AND revision_id = ?3", params![clean_box, item_id, clean_rev])
-    .map_err(|e| e.to_string())?;
   let clean_loc = location.trim();
+  let clean_sku = sku.trim();
+
+  let mut rows_updated = 0;
+  let mut final_sku = clean_sku.to_string();
+
+  // 1. Try to find the item's sku if not supplied
+  if final_sku.is_empty() && !item_id.is_empty() {
+    if let Ok(s) = conn.query_row(
+      "SELECT sku FROM inventory_items WHERE id = ?1 AND revision_id = ?2 LIMIT 1",
+      params![item_id, clean_rev],
+      |r| r.get::<_, String>(0),
+    ) {
+      final_sku = s;
+    }
+  }
+
+  // 2. Update by ID
+  if !item_id.is_empty() {
+    if let Ok(cnt) = conn.execute(
+      "UPDATE inventory_items SET box_number = ?1, updated_at = datetime('now', 'localtime') WHERE id = ?2 AND revision_id = ?3",
+      params![clean_box, item_id, clean_rev],
+    ) {
+      rows_updated = cnt;
+    }
+  }
+
+  // 3. Fallback: update by location and sku if id didn't match
+  if rows_updated == 0 && !clean_loc.is_empty() && !final_sku.is_empty() {
+    let _ = conn.execute(
+      "UPDATE inventory_items SET box_number = ?1, updated_at = datetime('now', 'localtime') 
+       WHERE (TRIM(location) = ?2 OR location = ?2) AND sku = ?3 AND revision_id = ?4",
+      params![clean_box, clean_loc, final_sku, clean_rev],
+    );
+  }
+
   if !clean_loc.is_empty() {
     let _ = conn.execute("UPDATE mobile_tasks SET updated_at = datetime('now', 'localtime') WHERE name = ?1 AND revision_id = ?2", params![clean_loc, clean_rev]);
   }
 
   record_sync_event(
     &conn,
-    clean_rev,
+    &clean_rev,
     "",
     "box_updated",
     &json!({
       "type": "box_updated",
       "item_id": item_id,
+      "sku": final_sku,
       "box_number": clean_box,
       "location": clean_loc,
       "revision_id": clean_rev,
@@ -1608,21 +1651,65 @@ fn update_item_box(db_path: &Path, revision_id: &str, item_id: &str, box_number:
     }),
   );
 
-  touch_client_action(&conn, clean_rev, user_name, device_name, &format!("№ коробки {} ({})", clean_box, clean_loc));
+  touch_client_action(&conn, &clean_rev, user_name, device_name, &format!("№ коробки {} ({})", clean_box, clean_loc));
 
   Ok(())
 }
 
-fn update_item_qty(db_path: &Path, revision_id: &str, item_id: &str, new_qty: i64, location: &str, user_name: &str, device_name: &str) -> Result<(), String> {
+fn update_item_qty(
+  db_path: &Path,
+  revision_id: &str,
+  item_id: &str,
+  new_qty: i64,
+  location: &str,
+  sku: &str,
+  user_name: &str,
+  device_name: &str,
+) -> Result<(), String> {
   let conn = open_db(db_path)?;
-  let clean_rev = revision_id.trim();
-  if new_qty <= 0 {
-    conn.execute("DELETE FROM inventory_items WHERE id = ?1 AND revision_id = ?2", params![item_id, clean_rev])
-      .map_err(|e| e.to_string())?;
-  } else {
-    conn.execute("UPDATE inventory_items SET quantity = ?1, updated_at = datetime('now', 'localtime') WHERE id = ?2 AND revision_id = ?3", params![new_qty, item_id, clean_rev])
-      .map_err(|e| e.to_string())?;
+  let clean_rev = get_active_revision(&conn, revision_id);
+  let clean_loc = location.trim();
+  let clean_sku = sku.trim();
+
+  let mut rows_affected = 0;
+  let mut final_sku = clean_sku.to_string();
+
+  if final_sku.is_empty() && !item_id.is_empty() {
+    if let Ok(s) = conn.query_row(
+      "SELECT sku FROM inventory_items WHERE id = ?1 AND revision_id = ?2 LIMIT 1",
+      params![item_id, clean_rev],
+      |r| r.get::<_, String>(0),
+    ) {
+      final_sku = s;
+    }
   }
+
+  if !item_id.is_empty() {
+    if new_qty <= 0 {
+      if let Ok(cnt) = conn.execute("DELETE FROM inventory_items WHERE id = ?1 AND revision_id = ?2", params![item_id, clean_rev]) {
+        rows_affected = cnt;
+      }
+    } else {
+      if let Ok(cnt) = conn.execute("UPDATE inventory_items SET quantity = ?1, updated_at = datetime('now', 'localtime') WHERE id = ?2 AND revision_id = ?3", params![new_qty, item_id, clean_rev]) {
+        rows_affected = cnt;
+      }
+    }
+  }
+
+  if rows_affected == 0 && !clean_loc.is_empty() && !final_sku.is_empty() {
+    if new_qty <= 0 {
+      let _ = conn.execute(
+        "DELETE FROM inventory_items WHERE (TRIM(location) = ?1 OR location = ?1) AND sku = ?2 AND revision_id = ?3",
+        params![clean_loc, final_sku, clean_rev],
+      );
+    } else {
+      let _ = conn.execute(
+        "UPDATE inventory_items SET quantity = ?1, updated_at = datetime('now', 'localtime') WHERE (TRIM(location) = ?2 OR location = ?2) AND sku = ?3 AND revision_id = ?4",
+        params![new_qty, clean_loc, final_sku, clean_rev],
+      );
+    }
+  }
+
   let clean_loc = location.trim();
   if !clean_loc.is_empty() {
     let _ = conn.execute("UPDATE mobile_tasks SET updated_at = datetime('now', 'localtime') WHERE name = ?1 AND revision_id = ?2", params![clean_loc, clean_rev]);
@@ -1630,12 +1717,13 @@ fn update_item_qty(db_path: &Path, revision_id: &str, item_id: &str, new_qty: i6
 
   record_sync_event(
     &conn,
-    clean_rev,
+    &clean_rev,
     "",
     "item_updated",
     &json!({
       "type": "item_updated",
       "item_id": item_id,
+      "sku": final_sku,
       "quantity": new_qty,
       "location": clean_loc,
       "revision_id": clean_rev,
@@ -1644,7 +1732,7 @@ fn update_item_qty(db_path: &Path, revision_id: &str, item_id: &str, new_qty: i6
     }),
   );
 
-  touch_client_action(&conn, clean_rev, user_name, device_name, &format!("Кол-во {} шт. ({})", new_qty, clean_loc));
+  touch_client_action(&conn, &clean_rev, user_name, device_name, &format!("Кол-во {} шт. ({})", new_qty, clean_loc));
 
   Ok(())
 }
@@ -1896,7 +1984,7 @@ fn main() {
         };
         let res = json!({
           "status": "ok",
-          "version": "1.0.25",
+          "version": "1.0.26",
           "uptime_seconds": uptime,
           "db_size_bytes": db_size,
           "items_count": items_count,
@@ -2056,8 +2144,10 @@ fn main() {
         let scans = val.get("scans").and_then(|v| v.as_array()).cloned().unwrap_or_default();
         let batch_user_name = val.get("user_name").and_then(|v| v.as_str()).unwrap_or("");
         let batch_device_name = val.get("device_name").and_then(|v| v.as_str()).unwrap_or("");
+        let rev = val.get("revision_id").and_then(|v| v.as_str()).unwrap_or(&active_rev);
+        let store = val.get("store_number").and_then(|v| v.as_str()).unwrap_or(&active_store);
 
-        match scan_batch(&db_path, &active_rev, &active_store, scans, batch_user_name, batch_device_name) {
+        match scan_batch(&db_path, rev, store, scans, batch_user_name, batch_device_name) {
           Ok(res) => {
             let _ = request.respond(respond_json(&res, 200));
           }
@@ -2098,13 +2188,14 @@ fn main() {
         let _ = request.as_reader().read_to_string(&mut body);
         let val: serde_json::Value = serde_json::from_str(&body).unwrap_or(json!({}));
         let item_id = val.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let sku = val.get("sku").and_then(|v| v.as_str()).unwrap_or("");
         let location = val.get("location").and_then(|v| v.as_str()).unwrap_or("");
         let rev = val.get("revision_id").and_then(|v| v.as_str()).unwrap_or(&active_rev);
         let user_name = val.get("user_name").and_then(|v| v.as_str()).unwrap_or("");
         let device_name = val.get("device_name").and_then(|v| v.as_str()).unwrap_or("");
 
         if let Some(box_num) = val.get("box_number").and_then(|v| v.as_str()) {
-          match update_item_box(&db_path, rev, item_id, box_num, location, user_name, device_name) {
+          match update_item_box(&db_path, rev, item_id, box_num, location, sku, user_name, device_name) {
             Ok(_) => {
               let _ = request.respond(respond_json(&json!({ "success": true }), 200));
             }
@@ -2114,7 +2205,7 @@ fn main() {
           }
         } else {
           let new_qty = val.get("quantity").and_then(|v| v.as_i64()).unwrap_or(0);
-          match update_item_qty(&db_path, rev, item_id, new_qty, location, user_name, device_name) {
+          match update_item_qty(&db_path, rev, item_id, new_qty, location, sku, user_name, device_name) {
             Ok(_) => {
               let _ = request.respond(respond_json(&json!({ "success": true }), 200));
             }

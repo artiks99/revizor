@@ -1606,7 +1606,7 @@
           }))
         };
 
-        const res = await fetchWithTimeout('/api/scan/batch', {
+        const res = await fetchWithTimeout(apiUrl('/api/scan/batch'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -1998,7 +1998,7 @@
       }
 
       try {
-        const res = await fetchWithTimeout('/api/tasks', {
+        const res = await fetchWithTimeout(apiUrl('/api/tasks'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name })
@@ -2080,7 +2080,7 @@
       }
       if (!confirm(`Удалить задачу «${taskName}»?`)) return;
       try {
-        const res = await fetchWithTimeout('/api/task/delete', {
+        const res = await fetchWithTimeout(apiUrl('/api/task/delete'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: taskName })
@@ -2198,12 +2198,12 @@
           const boxHtml = item.box_number
             ? `<span class="box-badge-readonly" title="Номер коробки зафиксирован">📦 № ${escapeHtml(item.box_number)}</span>`
             : (!isDone
-                ? `<span class="box-badge-empty" onclick="promptEditBox('${item.id}', '')" title="Нажмите, чтобы указать номер коробки">+ кор</span>`
+                ? `<span class="box-badge-empty" onclick="promptEditBox('${item.id}', '', '${escapeHtml(item.sku || '')}')" title="Нажмите, чтобы указать номер коробки">+ кор</span>`
                 : ''
               );
           const qtyHtml = isDone
             ? `<span class="qty-pill-readonly">${item.quantity} шт.</span>`
-            : `<span class="qty-pill" onclick="promptEditQty('${item.id}', ${item.quantity})" title="Нажмите для изменения количества">${item.quantity}</span>`;
+            : `<span class="qty-pill" onclick="promptEditQty('${item.id}', ${item.quantity}, '${escapeHtml(item.sku || '')}')" title="Нажмите для изменения количества">${item.quantity}</span>`;
 
           const safeSku = escapeHtml(item.sku);
           const safeName = escapeHtml(item.name || '');
@@ -2285,7 +2285,7 @@
         btn.disabled = true;
         btn.innerHTML = '<span>Завершение...</span>';
 
-        const res = await fetchWithTimeout('/api/task/complete', {
+        const res = await fetchWithTimeout(apiUrl('/api/task/complete'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: activeTask })
@@ -2314,7 +2314,7 @@
       }
     }
 
-    async function promptEditBox(itemId, currentBox) {
+    async function promptEditBox(itemId, currentBox, itemSku) {
       if (currentTaskStatus === 'completed') {
         showToast('Задача завершена. Изменение коробки заблокировано.');
         return;
@@ -2333,10 +2333,19 @@
       const cleanVal = val.trim();
       if (!cleanVal) return;
       try {
-        const res = await fetchWithTimeout('/api/item/update', {
+        const res = await fetchWithTimeout(apiUrl('/api/item/update'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: itemId, box_number: val.trim(), location: activeTask })
+          body: JSON.stringify({
+            id: itemId,
+            sku: itemSku || '',
+            box_number: cleanVal,
+            location: activeTask,
+            revision_id: activeRevisionId,
+            store_number: activeStoreNumber,
+            user_name: userName,
+            device_name: getDeviceName(),
+          })
         }, 5000);
         const data = await res.json();
         if (data.success) {
@@ -2352,7 +2361,7 @@
       }
     }
 
-    function promptEditQty(itemId, currentQty) {
+    function promptEditQty(itemId, currentQty, itemSku) {
       if (currentTaskStatus === 'completed') {
         showToast('Задача завершена. Изменение количества заблокировано.');
         return;
@@ -2366,7 +2375,7 @@
       if (val === null) return;
       const parsed = parseInt(val.trim(), 10);
       if (!isNaN(parsed) && parsed >= 0) {
-        updateItem(itemId, parsed);
+        updateItem(itemId, parsed, itemSku);
       }
     }
 
@@ -2812,7 +2821,7 @@
       }
     }
 
-    async function updateItem(itemId, newQty) {
+    async function updateItem(itemId, newQty, itemSku) {
       if (currentTaskStatus === 'completed') {
         showToast('Задача завершена. Изменение количества заблокировано.');
         return;
@@ -2823,10 +2832,19 @@
         return;
       }
       try {
-        const res = await fetchWithTimeout('/api/item/update', {
+        const res = await fetchWithTimeout(apiUrl('/api/item/update'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: itemId, quantity: newQty, location: activeTask })
+          body: JSON.stringify({
+            id: itemId,
+            sku: itemSku || '',
+            quantity: newQty,
+            location: activeTask,
+            revision_id: activeRevisionId,
+            store_number: activeStoreNumber,
+            user_name: userName,
+            device_name: getDeviceName(),
+          })
         }, 5000);
         const data = await res.json();
         if (data.success) {

@@ -1549,7 +1549,7 @@ export function createInventoryRepository(db: DatabaseProvider) {
     async applyMobileScan(
       revisionId: string,
       storeNumber: string,
-      item: { sku: string; name?: string; barcode?: string; addQty: number; location: string; boxNumber?: string }
+      item: { id?: string; sku: string; name?: string; barcode?: string; addQty: number; location: string; boxNumber?: string }
     ): Promise<void> {
       const revDb = await getRevDb(revisionId)
       const cleanLoc = item.location.trim()
@@ -1593,7 +1593,7 @@ export function createInventoryRepository(db: DatabaseProvider) {
           finalName = `Товар ${cleanSku}`
         }
 
-        const newId = `item_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+        const newId = item.id?.trim() || `item_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
         await revDb.execute(
           `INSERT INTO ${TABLE} (id, name, sku, category, quantity, unit, location, box_number, status, created_at, updated_at)
            VALUES ($1, $2, $3, '', $4, 'шт.', $5, $6, 'ok', datetime('now'), datetime('now'))`,
@@ -1603,19 +1603,81 @@ export function createInventoryRepository(db: DatabaseProvider) {
     },
 
     /** Обновить количество позиции с мобильного */
-    async applyMobileItemUpdate(revisionId: string, itemId: string, quantity: number): Promise<void> {
+    async applyMobileItemUpdate(
+      revisionId: string,
+      itemId: string,
+      quantity: number,
+      location?: string,
+      sku?: string
+    ): Promise<void> {
       const revDb = await getRevDb(revisionId)
-      if (quantity <= 0) {
-        await revDb.execute(`DELETE FROM ${TABLE} WHERE id = $1`, [itemId])
-      } else {
-        await revDb.execute(`UPDATE ${TABLE} SET quantity = $1, updated_at = datetime('now') WHERE id = $2`, [quantity, itemId])
+      const cleanLoc = (location || '').trim()
+      const cleanSku = (sku || '').trim()
+
+      let rowsAffected = 0
+      if (itemId) {
+        if (quantity <= 0) {
+          const res = await revDb.execute(`DELETE FROM ${TABLE} WHERE id = $1`, [itemId])
+          rowsAffected = res.rowsAffected || 0
+        } else {
+          const res = await revDb.execute(`UPDATE ${TABLE} SET quantity = $1, updated_at = datetime('now') WHERE id = $2`, [quantity, itemId])
+          rowsAffected = res.rowsAffected || 0
+        }
+      }
+
+      if (rowsAffected === 0 && cleanLoc && cleanSku) {
+        if (quantity <= 0) {
+          await revDb.execute(
+            `DELETE FROM ${TABLE} WHERE (TRIM(location) = $1 OR location = $1) AND sku = $2`,
+            [cleanLoc, cleanSku]
+          )
+        } else {
+          await revDb.execute(
+            `UPDATE ${TABLE} SET quantity = $1, updated_at = datetime('now') WHERE (TRIM(location) = $2 OR location = $2) AND sku = $3`,
+            [quantity, cleanLoc, cleanSku]
+          )
+        }
       }
     },
 
     /** Обновить коробку позиции с мобильного */
-    async applyMobileBoxUpdate(revisionId: string, itemId: string, boxNumber: string): Promise<void> {
+    async applyMobileBoxUpdate(
+      revisionId: string,
+      itemId: string,
+      boxNumber: string,
+      location?: string,
+      sku?: string
+    ): Promise<void> {
       const revDb = await getRevDb(revisionId)
-      await revDb.execute(`UPDATE ${TABLE} SET box_number = $1, updated_at = datetime('now') WHERE id = $2`, [boxNumber.trim(), itemId])
+      const cleanBox = (boxNumber || '').trim()
+      const cleanLoc = (location || '').trim()
+      const cleanSku = (sku || '').trim()
+
+      let rowsAffected = 0
+      if (itemId) {
+        const res = await revDb.execute(
+          `UPDATE ${TABLE} SET box_number = $1, updated_at = datetime('now') WHERE id = $2`,
+          [cleanBox, itemId]
+        )
+        rowsAffected = res.rowsAffected || 0
+      }
+
+      if (rowsAffected === 0 && cleanLoc && cleanSku) {
+        const res = await revDb.execute(
+          `UPDATE ${TABLE} SET box_number = $1, updated_at = datetime('now') 
+           WHERE (TRIM(location) = $2 OR location = $2) AND sku = $3 
+             AND (box_number IS NULL OR TRIM(box_number) = '' OR box_number = $1)`,
+          [cleanBox, cleanLoc, cleanSku]
+        )
+        rowsAffected = res.rowsAffected || 0
+        if (rowsAffected === 0) {
+          await revDb.execute(
+            `UPDATE ${TABLE} SET box_number = $1, updated_at = datetime('now') 
+             WHERE (TRIM(location) = $2 OR location = $2) AND sku = $3`,
+            [cleanBox, cleanLoc, cleanSku]
+          )
+        }
+      }
     },
   }
 }

@@ -1161,11 +1161,13 @@ fn update_item_box(
   item_id: &str,
   box_number: &str,
   location: &str,
-) -> Result<(), String> {
+  sku_hint: &str,
+) -> Result<String, String> {
   let conn = open_db(db_path)?;
   let _ = ensure_mobile_tables(&conn);
   let clean_loc = location.trim();
   let clean_box = box_number.trim();
+  let clean_sku_hint = sku_hint.trim();
 
   if !clean_loc.is_empty() {
     let task_status: String = conn.query_row(
@@ -1177,6 +1179,8 @@ fn update_item_box(
       return Err("Задача уже завершена. Изменение номера коробки заблокировано.".to_string());
     }
   }
+
+  let mut final_sku = clean_sku_hint.to_string();
 
   let is_draft: bool = conn.query_row(
     "SELECT 1 FROM mobile_task_items WHERE id = ?1",
@@ -1191,6 +1195,7 @@ fn update_item_box(
       |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     );
     if let Ok((sku, qty, cur_box)) = current {
+      final_sku = sku.clone();
       let cur_clean = cur_box.trim();
       if !cur_clean.is_empty() && cur_clean != clean_box {
         return Err("Номер коробки уже указан и не может быть изменен.".to_string());
@@ -1224,9 +1229,20 @@ fn update_item_box(
       "SELECT sku, quantity, COALESCE(box_number, '') FROM inventory_items WHERE id = ?1",
       params![item_id],
       |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-    );
+    ).or_else(|_| {
+      if !clean_loc.is_empty() && !clean_sku_hint.is_empty() {
+        conn.query_row(
+          "SELECT sku, quantity, COALESCE(box_number, '') FROM inventory_items WHERE (TRIM(location) = ?1 OR location = ?1) AND sku = ?2 LIMIT 1",
+          params![clean_loc, clean_sku_hint],
+          |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+      } else {
+        Err(rusqlite::Error::QueryReturnedNoRows)
+      }
+    });
 
     if let Ok((sku, qty, cur_box)) = current {
+      final_sku = sku.clone();
       let cur_clean = cur_box.trim();
       if !cur_clean.is_empty() && cur_clean != clean_box {
         return Err("Номер коробки уже указан и не может быть изменен.".to_string());
@@ -1260,7 +1276,10 @@ fn update_item_box(
         conn.execute("UPDATE inventory_items SET quantity = ?1, updated_at = datetime('now', 'localtime') WHERE id = ?2", params![merged_qty, target_id]).map_err(|e| e.to_string())?;
         conn.execute("DELETE FROM inventory_items WHERE id = ?1", params![item_id]).map_err(|e| e.to_string())?;
       } else {
-        conn.execute("UPDATE inventory_items SET box_number = ?1, updated_at = datetime('now', 'localtime') WHERE id = ?2", params![clean_box, item_id]).map_err(|e| e.to_string())?;
+        let updated = conn.execute("UPDATE inventory_items SET box_number = ?1, updated_at = datetime('now', 'localtime') WHERE id = ?2", params![clean_box, item_id]).unwrap_or(0);
+        if updated == 0 && !clean_loc.is_empty() && !final_sku.is_empty() {
+          let _ = conn.execute("UPDATE inventory_items SET box_number = ?1, updated_at = datetime('now', 'localtime') WHERE (TRIM(location) = ?2 OR location = ?2) AND sku = ?3", params![clean_box, clean_loc, final_sku]);
+        }
       }
     }
   }
@@ -1271,7 +1290,7 @@ fn update_item_box(
       params![clean_loc],
     );
   }
-  Ok(())
+  Ok(final_sku)
 }
 
 /// Обновить количество товара напрямую
@@ -1770,15 +1789,17 @@ pub fn start_server(
               let _ = request.as_reader().read_to_string(&mut body);
               let val: serde_json::Value = serde_json::from_str(&body).unwrap_or(json!({}));
               let item_id = val.get("id").and_then(|v| v.as_str()).unwrap_or("");
+              let sku = val.get("sku").and_then(|v| v.as_str()).unwrap_or("");
               let location = val.get("location").and_then(|v| v.as_str()).unwrap_or("");
 
               if let Some(box_num) = val.get("box_number").and_then(|v| v.as_str()) {
-                match update_item_box(&current_db, item_id, box_num, location) {
-                  Ok(_) => {
+                match update_item_box(&current_db, item_id, box_num, location, sku) {
+                  Ok(resolved_sku) => {
                     if let Some(app) = &app_handle_opt {
                       let _ = app.emit("mobile-sync", json!({
                         "type": "box_updated",
                         "item_id": item_id,
+                        "sku": resolved_sku,
                         "box_number": box_num,
                         "location": location,
                         "revision_id": active_rev
@@ -3588,12 +3609,12 @@ fn get_mobile_html() -> String {
           const boxHtml = item.box_number
             ? `<span class="box-badge-readonly" title="Номер коробки зафиксирован">📦 № ${escapeHtml(item.box_number)}</span>`
             : (!isDone
-                ? `<span class="box-badge-empty" onclick="promptEditBox('${item.id}', '')" title="Нажмите, чтобы указать номер коробки">+ кор</span>`
+                ? `<span class="box-badge-empty" onclick="promptEditBox('${item.id}', '', '${escapeHtml(item.sku || '')}')" title="Нажмите, чтобы указать номер коробки">+ кор</span>`
                 : ''
               );
           const qtyHtml = isDone
             ? `<span class="qty-pill-readonly">${item.quantity} шт.</span>`
-            : `<span class="qty-pill" onclick="promptEditQty('${item.id}', ${item.quantity})" title="Нажмите для изменения количества">${item.quantity}</span>`;
+            : `<span class="qty-pill" onclick="promptEditQty('${item.id}', ${item.quantity}, '${escapeHtml(item.sku || '')}')" title="Нажмите для изменения количества">${item.quantity}</span>`;
 
           const safeSku = escapeHtml(item.sku);
           const safeName = escapeHtml(item.name || '');
@@ -3704,7 +3725,7 @@ fn get_mobile_html() -> String {
       }
     }
 
-    async function promptEditBox(itemId, currentBox) {
+    async function promptEditBox(itemId, currentBox, itemSku) {
       if (currentTaskStatus === 'completed') {
         showToast('Задача завершена. Изменение коробки заблокировано.');
         return;
@@ -3726,7 +3747,7 @@ fn get_mobile_html() -> String {
         const res = await fetchWithTimeout('/api/item/update', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: itemId, box_number: val.trim(), location: activeTask })
+          body: JSON.stringify({ id: itemId, sku: itemSku || '', box_number: cleanVal, location: activeTask })
         }, 5000);
         const data = await res.json();
         if (data.success) {
@@ -3742,7 +3763,7 @@ fn get_mobile_html() -> String {
       }
     }
 
-    function promptEditQty(itemId, currentQty) {
+    function promptEditQty(itemId, currentQty, itemSku) {
       if (currentTaskStatus === 'completed') {
         showToast('Задача завершена. Изменение количества заблокировано.');
         return;
@@ -3756,7 +3777,7 @@ fn get_mobile_html() -> String {
       if (val === null) return;
       const parsed = parseInt(val.trim(), 10);
       if (!isNaN(parsed) && parsed >= 0) {
-        updateItem(itemId, parsed);
+        updateItem(itemId, parsed, itemSku);
       }
     }
 
@@ -4210,7 +4231,7 @@ fn get_mobile_html() -> String {
       }
     }
 
-    async function updateItem(itemId, newQty) {
+    async function updateItem(itemId, newQty, itemSku) {
       if (currentTaskStatus === 'completed') {
         showToast('Задача завершена. Изменение количества заблокировано.');
         return;
@@ -4224,7 +4245,7 @@ fn get_mobile_html() -> String {
         const res = await fetchWithTimeout('/api/item/update', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: itemId, quantity: newQty, location: activeTask })
+          body: JSON.stringify({ id: itemId, sku: itemSku || '', quantity: newQty, location: activeTask })
         }, 5000);
         const data = await res.json();
         if (data.success) {
