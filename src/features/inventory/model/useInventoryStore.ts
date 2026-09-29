@@ -1810,6 +1810,7 @@ export const useInventoryStore = defineStore('inventory', () => {
     archivedRevisions,
     activeRevisionId,
     activeRevision,
+    currentPartitionId,
     activeStoreNumber,
     findConflictingRevision,
     setRepository,

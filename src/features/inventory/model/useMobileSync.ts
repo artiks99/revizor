@@ -61,6 +61,8 @@ const connectedClients = ref<ConnectedClient[]>([])
 let pollInterval: ReturnType<typeof setInterval> | null = null
 let lastEventId = 0
 let activeSyncRevId = ''
+let isPolling = false
+const processedEventIds = new Set<number>()
 
 function loadSavedActivities(revisionId: string) {
   if (!revisionId) return
@@ -151,8 +153,24 @@ export function useMobileSync() {
   }
 
   async function uploadDataToVds(revisionId: string, storeNumber: string) {
+    if (!revisionId) return
     try {
       isSyncing.value = true
+
+      // Гарантируем загрузку всех справочников из локальной БД SQLite, если они еще не подгружены в память
+      if (!store.multiplicityItems || store.multiplicityItems.length === 0) {
+        await store.loadMultiplicity()
+      }
+      if (!store.catalogItems || store.catalogItems.length === 0) {
+        await store.loadCatalog()
+      }
+      if (!store.stockItems || store.stockItems.length === 0) {
+        await store.loadStock()
+      }
+      if (!store.items || store.items.length === 0) {
+        await store.loadItems()
+      }
+
       const tasks = store.distinctLocations || []
       const items = store.items.map((i) => ({
         id: i.id,
@@ -174,6 +192,12 @@ export function useMobileSync() {
         quantity: s.quantity || 0,
       }))
 
+      const multiplicity = (store.multiplicityItems || []).map((m) => ({
+        sku: String(m.sku || '').trim(),
+        name: m.name || '',
+        multiplicity: Number(m.multiplicity) || 1,
+      }))
+
       const resp = await fetch(`${VDS_BASE_URL}/api/sync/upload`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -184,10 +208,11 @@ export function useMobileSync() {
           items: items.slice(0, 50000),
           catalog: catalog.slice(0, 20000),
           stock: stock.slice(0, 20000),
+          multiplicity: multiplicity.slice(0, 20000),
         }),
       })
       if (resp.ok) {
-        pushActivity(`Синхронизировано с VDS: ${tasks.length} зон, ${items.length} факт. поз., ${catalog.length} товаров`, 'connect')
+        pushActivity(`Синхронизировано с VDS: ${tasks.length} зон, ${items.length} факт. поз., ${catalog.length} товаров, ${multiplicity.length} кратн.`, 'connect')
       }
     } catch (err) {
       console.warn('[useMobileSync] uploadDataToVds error:', err)
@@ -215,7 +240,8 @@ export function useMobileSync() {
   }
 
   async function pollEvents(revisionId: string, storeNumber: string) {
-    if (!revisionId) return
+    if (!revisionId || isPolling) return
+    isPolling = true
     try {
       clientPollCounter++
       if (clientPollCounter % 2 === 1) {
@@ -233,9 +259,26 @@ export function useMobileSync() {
       serverInfo.value.is_running = true
 
       const data = await resp.json()
-      if (!data.success || !Array.isArray(data.events)) return
+      if (!data.success || !Array.isArray(data.events) || data.events.length === 0) return
+
+      let hasItemChanges = false
+      let hasStoreDataChanges = false
 
       for (const ev of data.events) {
+        if (ev.id > lastEventId) {
+          lastEventId = ev.id
+          try {
+            localStorage.setItem(`revizor_vds_last_id_${revisionId}`, String(lastEventId))
+          } catch (_) {}
+        }
+
+        if (processedEventIds.has(ev.id)) continue
+        processedEventIds.add(ev.id)
+        if (processedEventIds.size > 2000) {
+          const first = processedEventIds.values().next().value
+          if (first !== undefined) processedEventIds.delete(first)
+        }
+
         const payload = ev.payload
         if (!payload) continue
 
@@ -274,7 +317,7 @@ export function useMobileSync() {
             },
             revisionId
           )
-          await store.loadItems()
+          hasItemChanges = true
         } else if (ev.event_type === 'item_updated') {
           const qty = payload.quantity
           const desc = `Изменено количество: ${qty} шт. (${payload.location || ''})`
@@ -291,7 +334,7 @@ export function useMobileSync() {
           })
           if (payload.item_id) {
             await store.applyMobileItemUpdate(payload.item_id, qty, revisionId)
-            await store.loadItems()
+            hasItemChanges = true
           }
         } else if (ev.event_type === 'box_updated') {
           const box = payload.box_number || '—'
@@ -309,7 +352,7 @@ export function useMobileSync() {
           })
           if (payload.item_id) {
             await store.applyMobileBoxUpdate(payload.item_id, payload.box_number, revisionId)
-            await store.loadItems()
+            hasItemChanges = true
           }
         } else if (ev.event_type === 'task_created') {
           const desc = `Создана локация: "${payload.task}"`
@@ -323,7 +366,7 @@ export function useMobileSync() {
             type: 'info',
             message: `📱 ${userName}: ${desc}`,
           })
-          await store.loadItems()
+          hasItemChanges = true
         } else if (ev.event_type === 'task_completed') {
           const count = payload.items_count || 0
           const qty = payload.total_qty || 0
@@ -339,8 +382,8 @@ export function useMobileSync() {
             type: 'success',
             message: `📱 ${userName}: ${desc}`,
           })
-          await store.loadItems()
-          await store.loadAllStoreData()
+          hasItemChanges = true
+          hasStoreDataChanges = true
         } else if (ev.event_type === 'task_deleted') {
           const desc = `Удалена локация: "${payload.task}"`
           pushActivity(desc, 'task', {
@@ -353,18 +396,20 @@ export function useMobileSync() {
             type: 'info',
             message: `📱 ${userName}: ${desc}`,
           })
-          await store.loadItems()
+          hasItemChanges = true
         }
+      }
 
-        if (ev.id > lastEventId) {
-          lastEventId = ev.id
-          try {
-            localStorage.setItem(`revizor_vds_last_id_${revisionId}`, String(lastEventId))
-          } catch (_) {}
-        }
+      if (hasItemChanges) {
+        await store.loadItems()
+      }
+      if (hasStoreDataChanges) {
+        await store.loadAllStoreData()
       }
     } catch (err) {
       console.warn('[useMobileSync] pollEvents error:', err)
+    } finally {
+      isPolling = false
     }
   }
 
@@ -375,8 +420,26 @@ export function useMobileSync() {
 
     if (activeSyncRevId !== revisionId) {
       activeSyncRevId = revisionId
+      processedEventIds.clear()
       const saved = localStorage.getItem(`revizor_vds_last_id_${revisionId}`)
-      lastEventId = saved ? parseInt(saved, 10) || 0 : 0
+      if (saved) {
+        lastEventId = parseInt(saved, 10) || 0
+      } else {
+        // Запрашиваем актуальный latest_id с VDS, чтобы не накатывать повторно прошлые события
+        try {
+          const resp = await fetch(
+            `${VDS_BASE_URL}/api/sync/events?rev=${encodeURIComponent(revisionId)}&store=${encodeURIComponent(storeNumber)}&after=999999999`,
+            { signal: AbortSignal.timeout(3000) }
+          )
+          if (resp.ok) {
+            const data = await resp.json()
+            if (data.success && typeof data.latest_id === 'number') {
+              lastEventId = data.latest_id
+              localStorage.setItem(`revizor_vds_last_id_${revisionId}`, String(lastEventId))
+            }
+          }
+        } catch (_) {}
+      }
       loadSavedActivities(revisionId)
     }
 

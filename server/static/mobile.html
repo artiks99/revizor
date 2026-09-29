@@ -1308,7 +1308,7 @@
     if (paramRev) localStorage.setItem('revizor_vds_rev', paramRev);
     if (paramStore) localStorage.setItem('revizor_vds_store', paramStore);
 
-    let activeRevisionId = paramRev || localStorage.getItem('revizor_vds_rev') || 'default';
+    let activeRevisionId = paramRev || localStorage.getItem('revizor_vds_rev') || '';
     let activeStoreNumber = paramStore || localStorage.getItem('revizor_vds_store') || '';
 
     function getDeviceName() {
@@ -1549,13 +1549,21 @@
         }
 
         const payload = {
+          revision_id: activeRevisionId,
+          store_number: activeStoreNumber,
+          user_name: userName,
+          device_name: getDeviceName(),
           scans: pending.map(s => ({
             location: s.location,
             barcode: s.barcode,
             quantity: s.quantity,
             box_number: s.box_number || '',
             allow_unknown: !!s.allow_unknown,
-            client_scan_id: s.client_scan_id
+            client_scan_id: s.client_scan_id,
+            revision_id: s.revision_id || activeRevisionId,
+            store_number: s.store_number || activeStoreNumber,
+            user_name: userName,
+            device_name: getDeviceName()
           }))
         };
 
@@ -2712,7 +2720,9 @@
           box_number: boxNumber,
           allow_unknown: true,
           name: 'Н/Д ' + barcode,
-          sku: barcode
+          sku: barcode,
+          revision_id: activeRevisionId,
+          store_number: activeStoreNumber
         };
         try {
           await RevizorOffline.addScan(scanObj);

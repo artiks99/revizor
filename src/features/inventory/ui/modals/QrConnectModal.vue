@@ -38,7 +38,7 @@ const copied = ref(false)
 const qrSvg = ref('')
 
 const effectiveRevisionId = computed(() => {
-  return props.revisionId || (inventoryStore as any).currentPartitionId || (inventoryStore as any).activeRevisionId || 'default'
+  return props.revisionId || inventoryStore.currentPartitionId || inventoryStore.activeRevision?.id || ''
 })
 
 const effectiveStoreNumber = computed(() => {

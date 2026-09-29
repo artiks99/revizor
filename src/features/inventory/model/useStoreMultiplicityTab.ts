@@ -1,5 +1,6 @@
 import { ref, computed, nextTick, watch, onMounted, onUnmounted } from 'vue'
 import { useInventoryStore } from './useInventoryStore'
+import { useMobileSync } from './useMobileSync'
 import { useTableSort } from '@shared/lib/useTableSort'
 import { copySkusToClipboard, useExcelColumnFilter, withLoading, useUndoRedo } from '@shared'
 import type { StoreMultiplicityItem } from './types'
@@ -18,7 +19,20 @@ export interface MultiplicityConfirmDialogOptions {
 
 export function useStoreMultiplicityTab() {
   const store = useInventoryStore()
+  const { uploadDataToVds } = useMobileSync()
   const isReadOnly = computed(() => !!store.activeRevision?.isArchived)
+
+  let syncDebounceTimer: any = null
+  function triggerAutoSync() {
+    if (syncDebounceTimer) clearTimeout(syncDebounceTimer)
+    syncDebounceTimer = setTimeout(() => {
+      const revId = store.activeRevision?.id || store.activeRevisionId || store.currentPartitionId || ''
+      const storeNum = store.activeStoreNumber || ''
+      if (revId) {
+        uploadDataToVds(revId, storeNum).catch(() => {})
+      }
+    }, 400)
+  }
 
   /* --- TOAST NOTIFICATION --- */
   const pasteNotification = ref<string | null>(null)
@@ -145,14 +159,19 @@ export function useStoreMultiplicityTab() {
 
     try {
       await store.addMultiplicityItem({ sku, multiplicity })
+      triggerAutoSync()
       pushUndoAction({
         description: `Добавление кратности: ${sku} (×${multiplicity})`,
         undo: async () => {
           const found = store.multiplicityItems.find((i) => i.sku === sku)
-          if (found) await store.removeMultiplicityItem(found.id)
+          if (found) {
+            await store.removeMultiplicityItem(found.id)
+            triggerAutoSync()
+          }
         },
         redo: async () => {
           await store.addMultiplicityItem({ sku, multiplicity })
+          triggerAutoSync()
         },
       })
       newRow.value.sku = ''
@@ -228,15 +247,20 @@ export function useStoreMultiplicityTab() {
               `Сохранение в базу данных (${processed} из ${total})...`
             )
           })
+          triggerAutoSync()
           pushUndoAction({
             description: `Вставка ${parsedItems.length} позиций кратности`,
             undo: async () => {
               const skusToDel = new Set(parsedItems.map((p) => p.sku))
               const ids = store.multiplicityItems.filter((i) => skusToDel.has(i.sku)).map((i) => i.id)
-              if (ids.length > 0) await store.deleteMultiplicityItemsBatch(ids)
+              if (ids.length > 0) {
+                await store.deleteMultiplicityItemsBatch(ids)
+                triggerAutoSync()
+              }
             },
             redo: async () => {
               await store.addMultiplicityBatch(parsedItems)
+              triggerAutoSync()
             },
           })
           showPasteNotif(`Успешно добавлено ${parsedItems.length} позиций кратности`)
@@ -277,6 +301,7 @@ export function useStoreMultiplicityTab() {
         name: item.name,
         multiplicity: newMultiplicity,
       })
+      triggerAutoSync()
       pushUndoAction({
         description: `Кратность для ${item.sku}: ×${newMultiplicity}`,
         undo: async () => {
@@ -286,6 +311,7 @@ export function useStoreMultiplicityTab() {
             name: item.name,
             multiplicity: prevMultiplicity,
           })
+          triggerAutoSync()
         },
         redo: async () => {
           await store.updateMultiplicityItem({
@@ -294,6 +320,7 @@ export function useStoreMultiplicityTab() {
             name: item.name,
             multiplicity: newMultiplicity,
           })
+          triggerAutoSync()
         },
       })
       showPasteNotif(`Кратность для ${item.sku} обновлена: ×${newMultiplicity}`)
@@ -479,6 +506,7 @@ export function useStoreMultiplicityTab() {
         const deletedItem = { ...item }
         await store.removeMultiplicityItem(item.id)
         selectedIds.value.delete(item.id)
+        triggerAutoSync()
         pushUndoAction({
           description: `Удаление позиции: ${deletedItem.sku}`,
           undo: async () => {
@@ -486,10 +514,14 @@ export function useStoreMultiplicityTab() {
               sku: deletedItem.sku,
               multiplicity: deletedItem.multiplicity,
             })
+            triggerAutoSync()
           },
           redo: async () => {
             const found = store.multiplicityItems.find((i) => i.sku === deletedItem.sku)
-            if (found) await store.removeMultiplicityItem(found.id)
+            if (found) {
+              await store.removeMultiplicityItem(found.id)
+              triggerAutoSync()
+            }
           },
         })
         showPasteNotif('Позиция удалена')
@@ -512,17 +544,22 @@ export function useStoreMultiplicityTab() {
         const itemsToDelete = count <= 500 ? store.multiplicityItems.filter((i) => selectedSet.has(i.id)) : []
         await store.deleteMultiplicityItemsBatch(idList)
         clearSelection()
+        triggerAutoSync()
         if (itemsToDelete.length > 0) {
           const deletedData = itemsToDelete.map((it) => ({ sku: it.sku, name: it.name, multiplicity: it.multiplicity }))
           pushUndoAction({
             description: `Удаление ${itemsToDelete.length} позиций кратности`,
             undo: async () => {
               await store.addMultiplicityBatch(deletedData)
+              triggerAutoSync()
             },
             redo: async () => {
               const skuSet = new Set(deletedData.map((d) => d.sku))
               const ids = store.multiplicityItems.filter((i) => skuSet.has(i.sku)).map((i) => i.id)
-              if (ids.length > 0) await store.deleteMultiplicityItemsBatch(ids)
+              if (ids.length > 0) {
+                await store.deleteMultiplicityItemsBatch(ids)
+                triggerAutoSync()
+              }
             },
           })
         }
@@ -542,6 +579,7 @@ export function useStoreMultiplicityTab() {
       action: async () => {
         await store.clearMultiplicity()
         clearSelection()
+        triggerAutoSync()
         showPasteNotif('Список кратности полностью очищен')
       },
     })
@@ -632,6 +670,9 @@ export function useStoreMultiplicityTab() {
   onMounted(() => {
     document.addEventListener('click', handleDocClick)
     window.addEventListener('keydown', handleGlobalKeyDown)
+    if (store.multiplicityItems.length === 0) {
+      store.loadMultiplicity().catch(() => {})
+    }
   })
 
   onUnmounted(() => {

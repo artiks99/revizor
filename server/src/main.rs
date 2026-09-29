@@ -104,7 +104,7 @@ fn ensure_mobile_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
     "CREATE TABLE IF NOT EXISTS mobile_tasks (
       id TEXT PRIMARY KEY,
       revision_id TEXT NOT NULL DEFAULT '',
-      name TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'in_progress',
       created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
@@ -196,6 +196,20 @@ fn ensure_mobile_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
     [],
   )?;
 
+  conn.execute(
+    "CREATE TABLE IF NOT EXISTS store_multiplicity (
+      id TEXT PRIMARY KEY,
+      revision_id TEXT NOT NULL DEFAULT '',
+      store_number TEXT NOT NULL DEFAULT '',
+      sku TEXT NOT NULL,
+      name TEXT NOT NULL DEFAULT '',
+      multiplicity INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+    )",
+    [],
+  )?;
+
   let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_inv_loc ON inventory_items(location)", []);
   let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_inv_sku ON inventory_items(sku)", []);
   let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_mti_task ON mobile_task_items(task_name)", []);
@@ -203,6 +217,10 @@ fn ensure_mobile_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
   let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_cat_sku ON store_catalog(sku)", []);
   let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_cat_bc ON store_catalog(barcode)", []);
   let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_stock_sku ON store_stock(sku)", []);
+  let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_mult_sku ON store_multiplicity(sku)", []);
+  let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_mult_rev ON store_multiplicity(revision_id)", []);
+  let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_rev ON mobile_tasks(revision_id)", []);
+  let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_rev_name ON mobile_tasks(revision_id, name)", []);
   let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_proc_scans ON processed_client_scans(client_scan_id)", []);
   let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_active_clients_rev ON active_clients(revision_id, store_number)", []);
 
@@ -216,7 +234,7 @@ fn touch_client_action(conn: &Connection, revision_id: &str, user_name: &str, de
   let _ = conn.execute(
     "UPDATE active_clients 
      SET last_action = ?1, last_seen = datetime('now', 'localtime')
-     WHERE (revision_id = ?2 OR revision_id = '' OR revision_id = 'default')
+     WHERE revision_id = ?2
        AND (user_name = ?3 OR device_name = ?4)",
     params![action, revision_id, user_name, device_name],
   );
@@ -379,18 +397,23 @@ fn get_sync_events(db_path: &Path, revision_id: &str, after_id: i64) -> Result<(
   let conn = open_db(db_path)?;
   let _ = ensure_mobile_tables(&conn);
 
+  let clean_rev = revision_id.trim();
+  if clean_rev.is_empty() {
+    return Ok((Vec::new(), after_id));
+  }
+
   let mut stmt = conn
     .prepare(
       "SELECT id, revision_id, store_number, event_type, payload, created_at 
        FROM sync_events 
-       WHERE (?1 = '' OR ?1 = 'default' OR revision_id = ?1 OR revision_id = 'default' OR revision_id = '') AND id > ?2 
+       WHERE revision_id = ?1 AND id > ?2 
        ORDER BY id ASC LIMIT 500"
     )
     .map_err(|e| e.to_string())?;
 
   let mut max_id = after_id;
   let rows = stmt
-    .query_map(params![revision_id, after_id], |r| {
+    .query_map(params![clean_rev, after_id], |r| {
       let id: i64 = r.get(0)?;
       let rev: String = r.get(1)?;
       let store: String = r.get(2)?;
@@ -428,6 +451,7 @@ fn sync_upload_data(
   items: Vec<serde_json::Value>,
   catalog: Vec<serde_json::Value>,
   stock: Vec<serde_json::Value>,
+  multiplicity: Vec<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
   let mut conn = open_db(db_path)?;
   let _ = ensure_mobile_tables(&conn);
@@ -443,7 +467,7 @@ fn sync_upload_data(
       let _ = tx.execute(
         "INSERT INTO mobile_tasks (id, revision_id, name, status, created_at, updated_at)
          VALUES (?1, ?2, ?3, 'in_progress', datetime('now', 'localtime'), datetime('now', 'localtime'))
-         ON CONFLICT(name) DO UPDATE SET revision_id = ?2, updated_at = datetime('now', 'localtime')",
+         ON CONFLICT(id) DO UPDATE SET updated_at = datetime('now', 'localtime')",
         params![task_id, clean_rev, clean],
       );
       inserted_tasks += 1;
@@ -510,6 +534,32 @@ fn sync_upload_data(
     }
   }
 
+  let mut inserted_mult = 0;
+  if !multiplicity.is_empty() {
+    let _ = tx.execute("DELETE FROM store_multiplicity WHERE revision_id = ?1", params![clean_rev]);
+    for item in multiplicity {
+      let sku = item.get("sku").and_then(|v| v.as_str()).unwrap_or("").trim();
+      let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").trim();
+      let mult = item.get("multiplicity")
+        .and_then(|v| {
+          v.as_i64()
+            .or_else(|| v.as_f64().map(|f| f as i64))
+            .or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
+        })
+        .unwrap_or(1);
+      if !sku.is_empty() {
+        let mult_id = format!("{}_{}_{}", clean_rev, store_number, sku);
+        let _ = tx.execute(
+          "INSERT INTO store_multiplicity (id, revision_id, store_number, sku, name, multiplicity, created_at, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now', 'localtime'), datetime('now', 'localtime'))
+           ON CONFLICT(id) DO UPDATE SET multiplicity = ?6, name = ?5, updated_at = datetime('now', 'localtime')",
+          params![mult_id, clean_rev, store_number, sku, name, mult],
+        );
+        inserted_mult += 1;
+      }
+    }
+  }
+
   tx.commit().map_err(|e| e.to_string())?;
 
   Ok(json!({
@@ -518,6 +568,7 @@ fn sync_upload_data(
     "items_processed": inserted_items,
     "catalog_processed": inserted_cat,
     "stock_processed": inserted_stock,
+    "multiplicity_processed": inserted_mult,
   }))
 }
 
@@ -571,38 +622,19 @@ fn archive_revision(
     let _ = conn.execute("DELETE FROM sync_events", []);
     let _ = conn.execute("DELETE FROM store_catalog", []);
     let _ = conn.execute("DELETE FROM store_stock", []);
+    let _ = conn.execute("DELETE FROM store_multiplicity", []);
     let _ = conn.execute("DELETE FROM processed_client_scans", []);
-  } else {
-    if !clean_rev.is_empty() || !clean_store.is_empty() {
-      let _ = conn.execute(
-        "DELETE FROM inventory_items WHERE (?1 != '' AND revision_id = ?1) OR (?2 != '' AND store_number = ?2)",
-        params![clean_rev, clean_store],
-      );
-      let _ = conn.execute(
-        "DELETE FROM mobile_task_items WHERE ?1 != '' AND revision_id = ?1",
-        params![clean_rev],
-      );
-      let _ = conn.execute(
-        "DELETE FROM sync_events WHERE (?1 != '' AND revision_id = ?1) OR (?2 != '' AND store_number = ?2)",
-        params![clean_rev, clean_store],
-      );
-      let _ = conn.execute(
-        "DELETE FROM store_catalog WHERE (?1 != '' AND revision_id = ?1) OR (?2 != '' AND store_number = ?2)",
-        params![clean_rev, clean_store],
-      );
-      let _ = conn.execute(
-        "DELETE FROM store_stock WHERE (?1 != '' AND revision_id = ?1) OR (?2 != '' AND store_number = ?2)",
-        params![clean_rev, clean_store],
-      );
-      let _ = conn.execute(
-        "DELETE FROM processed_client_scans WHERE (?1 != '' AND revision_id = ?1) OR (?2 != '' AND store_number = ?2)",
-        params![clean_rev, clean_store],
-      );
-      let _ = conn.execute(
-        "DELETE FROM mobile_tasks WHERE (?1 != '' AND revision_id = ?1) OR name NOT IN (SELECT DISTINCT location FROM inventory_items)",
-        params![clean_rev],
-      );
-    }
+    let _ = conn.execute("DELETE FROM active_clients", []);
+  } else if !clean_rev.is_empty() {
+    let _ = conn.execute("DELETE FROM inventory_items WHERE revision_id = ?1", params![clean_rev]);
+    let _ = conn.execute("DELETE FROM mobile_task_items WHERE revision_id = ?1", params![clean_rev]);
+    let _ = conn.execute("DELETE FROM mobile_tasks WHERE revision_id = ?1", params![clean_rev]);
+    let _ = conn.execute("DELETE FROM store_catalog WHERE revision_id = ?1", params![clean_rev]);
+    let _ = conn.execute("DELETE FROM store_stock WHERE revision_id = ?1", params![clean_rev]);
+    let _ = conn.execute("DELETE FROM store_multiplicity WHERE revision_id = ?1", params![clean_rev]);
+    let _ = conn.execute("DELETE FROM sync_events WHERE revision_id = ?1", params![clean_rev]);
+    let _ = conn.execute("DELETE FROM processed_client_scans WHERE revision_id = ?1", params![clean_rev]);
+    let _ = conn.execute("DELETE FROM active_clients WHERE revision_id = ?1", params![clean_rev]);
   }
 
   // 5. Optimize and truncate WAL
@@ -634,12 +666,17 @@ fn archive_revision(
 }
 
 fn flush_draft_items(conn: &Connection, task_name: &str, revision_id: &str, store_number: &str) -> Result<(), String> {
+  let clean_rev = revision_id.trim();
+  if clean_rev.is_empty() {
+    return Ok(());
+  }
+
   let mut stmt = conn
-    .prepare("SELECT id, sku, barcode, name, quantity, box_number FROM mobile_task_items WHERE task_name = ?1")
+    .prepare("SELECT id, sku, barcode, name, quantity, box_number FROM mobile_task_items WHERE task_name = ?1 AND revision_id = ?2")
     .map_err(|e| e.to_string())?;
 
   let rows = stmt
-    .query_map(params![task_name], |r| {
+    .query_map(params![task_name, clean_rev], |r| {
       Ok((
         r.get::<_, String>(0)?,
         r.get::<_, String>(1)?,
@@ -655,14 +692,14 @@ fn flush_draft_items(conn: &Connection, task_name: &str, revision_id: &str, stor
     let (draft_id, sku, _barcode, name, qty, box_num) = r;
     let existing: Result<(String, i64), _> = if box_num.trim().is_empty() {
       conn.query_row(
-        "SELECT id, quantity FROM inventory_items WHERE (TRIM(location) = ?1 OR location = ?1) AND sku = ?2 AND (box_number IS NULL OR TRIM(box_number) = '') LIMIT 1",
-        params![task_name, sku],
+        "SELECT id, quantity FROM inventory_items WHERE (TRIM(location) = ?1 OR location = ?1) AND sku = ?2 AND revision_id = ?3 AND (box_number IS NULL OR TRIM(box_number) = '') LIMIT 1",
+        params![task_name, sku, clean_rev],
         |row| Ok((row.get(0)?, row.get(1)?)),
       )
     } else {
       conn.query_row(
-        "SELECT id, quantity FROM inventory_items WHERE (TRIM(location) = ?1 OR location = ?1) AND sku = ?2 AND TRIM(COALESCE(box_number, '')) = ?3 LIMIT 1",
-        params![task_name, sku, box_num.trim()],
+        "SELECT id, quantity FROM inventory_items WHERE (TRIM(location) = ?1 OR location = ?1) AND sku = ?2 AND revision_id = ?4 AND TRIM(COALESCE(box_number, '')) = ?3 LIMIT 1",
+        params![task_name, sku, box_num.trim(), clean_rev],
         |row| Ok((row.get(0)?, row.get(1)?)),
       )
     };
@@ -670,8 +707,8 @@ fn flush_draft_items(conn: &Connection, task_name: &str, revision_id: &str, stor
     match existing {
       Ok((item_id, cur_qty)) => {
         let _ = conn.execute(
-          "UPDATE inventory_items SET quantity = ?1, updated_at = datetime('now', 'localtime') WHERE id = ?2",
-          params![cur_qty + qty, item_id],
+          "UPDATE inventory_items SET quantity = ?1, updated_at = datetime('now', 'localtime') WHERE id = ?2 AND revision_id = ?3",
+          params![cur_qty + qty, item_id, clean_rev],
         );
       }
       Err(_) => {
@@ -679,11 +716,11 @@ fn flush_draft_items(conn: &Connection, task_name: &str, revision_id: &str, stor
         let _ = conn.execute(
           "INSERT INTO inventory_items (id, revision_id, store_number, name, sku, category, quantity, unit, location, box_number, status, created_at, updated_at)
            VALUES (?1, ?2, ?3, ?4, ?5, '', ?6, 'шт.', ?7, ?8, 'ok', datetime('now', 'localtime'), datetime('now', 'localtime'))",
-          params![new_id, revision_id, store_number, name, sku, qty, task_name, box_num.trim()],
+          params![new_id, clean_rev, store_number, name, sku, qty, task_name, box_num.trim()],
         );
       }
     }
-    let _ = conn.execute("DELETE FROM mobile_task_items WHERE id = ?1", params![draft_id]);
+    let _ = conn.execute("DELETE FROM mobile_task_items WHERE id = ?1 AND revision_id = ?2", params![draft_id, clean_rev]);
   }
 
   Ok(())
@@ -694,6 +731,9 @@ fn get_tasks(db_path: &Path, revision_id: &str) -> Result<Vec<TaskItemDto>, Stri
   let _ = ensure_mobile_tables(&conn);
 
   let clean_rev = revision_id.trim();
+  if clean_rev.is_empty() {
+    return Ok(Vec::new());
+  }
 
   let mut stmt = conn
     .prepare(
@@ -704,7 +744,7 @@ fn get_tasks(db_path: &Path, revision_id: &str) -> Result<Vec<TaskItemDto>, Stri
            COALESCE(created_at, '') as created_at, 
            COALESCE(updated_at, '') as updated_at 
          FROM mobile_tasks
-         WHERE (?1 = '' OR ?1 = 'default' OR revision_id = ?1)
+         WHERE revision_id = ?1
          UNION ALL
          SELECT 
            TRIM(location) as loc_name, 
@@ -713,10 +753,10 @@ fn get_tasks(db_path: &Path, revision_id: &str) -> Result<Vec<TaskItemDto>, Stri
            COALESCE(MAX(updated_at), '') as updated_at 
          FROM inventory_items 
          WHERE location IS NOT NULL AND TRIM(location) != '' 
-           AND (?1 = '' OR ?1 = 'default' OR revision_id = ?1)
+           AND revision_id = ?1
            AND TRIM(location) NOT IN (
              SELECT TRIM(name) FROM mobile_tasks 
-             WHERE (?1 = '' OR ?1 = 'default' OR revision_id = ?1)
+             WHERE revision_id = ?1
            )
          GROUP BY TRIM(location)
        )
@@ -729,13 +769,13 @@ fn get_tasks(db_path: &Path, revision_id: &str) -> Result<Vec<TaskItemDto>, Stri
            SELECT COALESCE(COUNT(DISTINCT sku), 0)
            FROM inventory_items 
            WHERE (TRIM(location) = all_tasks.loc_name OR location = all_tasks.loc_name)
-             AND (?1 = '' OR ?1 = 'default' OR revision_id = ?1)
+             AND revision_id = ?1
          ) as items_count,
          (
            SELECT COALESCE(SUM(quantity), 0)
            FROM inventory_items 
            WHERE (TRIM(location) = all_tasks.loc_name OR location = all_tasks.loc_name)
-             AND (?1 = '' OR ?1 = 'default' OR revision_id = ?1)
+             AND revision_id = ?1
          ) as total_qty
        FROM all_tasks
        WHERE loc_name != ''
@@ -773,33 +813,39 @@ fn create_task(db_path: &Path, revision_id: &str, name: &str, user_name: &str, d
   let conn = open_db(db_path)?;
   let _ = ensure_mobile_tables(&conn);
 
+  let clean_rev = revision_id.trim();
   let clean_name = name.trim();
   if clean_name.is_empty() {
     return Err("Название задачи не может быть пустым".to_string());
   }
+  if clean_rev.is_empty() {
+    return Err("Не указан идентификатор ревизии (revision_id)".to_string());
+  }
+
+  let task_id = format!("{}_{}", clean_rev, clean_name);
 
   conn.execute(
     "INSERT INTO mobile_tasks (id, revision_id, name, status, created_at, updated_at)
      VALUES (?1, ?2, ?3, 'in_progress', datetime('now', 'localtime'), datetime('now', 'localtime'))
-     ON CONFLICT(name) DO UPDATE SET updated_at = datetime('now', 'localtime')",
-    params![clean_name, revision_id, clean_name],
+     ON CONFLICT(id) DO UPDATE SET updated_at = datetime('now', 'localtime')",
+    params![task_id, clean_rev, clean_name],
   ).map_err(|e| format!("Ошибка создания задачи: {}", e))?;
 
   record_sync_event(
     &conn,
-    revision_id,
+    clean_rev,
     "",
     "task_created",
     &json!({
       "type": "task_created",
       "task": clean_name,
-      "revision_id": revision_id,
+      "revision_id": clean_rev,
       "user_name": user_name,
       "device_name": device_name,
     }),
   );
 
-  touch_client_action(&conn, revision_id, user_name, device_name, &format!("Создана задача «{}»", clean_name));
+  touch_client_action(&conn, clean_rev, user_name, device_name, &format!("Создана задача «{}»", clean_name));
 
   Ok(TaskItemDto {
     id: clean_name.to_string(),
@@ -815,29 +861,34 @@ fn create_task(db_path: &Path, revision_id: &str, name: &str, user_name: &str, d
 fn delete_task(db_path: &Path, revision_id: &str, name: &str, user_name: &str, device_name: &str) -> Result<(), String> {
   let conn = open_db(db_path)?;
   let _ = ensure_mobile_tables(&conn);
+  let clean_rev = revision_id.trim();
   let clean_name = name.trim();
-  conn.execute("DELETE FROM mobile_tasks WHERE name = ?1", params![clean_name])
+  if clean_rev.is_empty() {
+    return Err("Не указан идентификатор ревизии (revision_id)".to_string());
+  }
+
+  conn.execute("DELETE FROM mobile_tasks WHERE revision_id = ?1 AND name = ?2", params![clean_rev, clean_name])
     .map_err(|e| e.to_string())?;
-  conn.execute("DELETE FROM mobile_task_items WHERE task_name = ?1", params![clean_name])
+  conn.execute("DELETE FROM mobile_task_items WHERE revision_id = ?1 AND task_name = ?2", params![clean_rev, clean_name])
     .map_err(|e| e.to_string())?;
-  conn.execute("DELETE FROM inventory_items WHERE TRIM(location) = ?1 OR location = ?1", params![clean_name])
+  conn.execute("DELETE FROM inventory_items WHERE revision_id = ?1 AND (TRIM(location) = ?2 OR location = ?2)", params![clean_rev, clean_name])
     .map_err(|e| e.to_string())?;
 
   record_sync_event(
     &conn,
-    revision_id,
+    clean_rev,
     "",
     "task_deleted",
     &json!({
       "type": "task_deleted",
       "task": clean_name,
-      "revision_id": revision_id,
+      "revision_id": clean_rev,
       "user_name": user_name,
       "device_name": device_name,
     }),
   );
 
-  touch_client_action(&conn, revision_id, user_name, device_name, &format!("Удалена задача «{}»", clean_name));
+  touch_client_action(&conn, clean_rev, user_name, device_name, &format!("Удалена задача «{}»", clean_name));
 
   Ok(())
 }
@@ -852,11 +903,14 @@ fn get_task_items(
   let _ = ensure_mobile_tables(&conn);
   let clean_loc = location.trim();
   let clean_rev = revision_id.trim();
+  if clean_rev.is_empty() {
+    return Ok(("in_progress".to_string(), Vec::new()));
+  }
 
   let _ = flush_draft_items(&conn, clean_loc, clean_rev, store_number);
 
   let status: String = conn.query_row(
-    "SELECT status FROM mobile_tasks WHERE name = ?1 AND (?2 = '' OR ?2 = 'default' OR revision_id = ?2) LIMIT 1",
+    "SELECT status FROM mobile_tasks WHERE name = ?1 AND revision_id = ?2 LIMIT 1",
     params![clean_loc, clean_rev],
     |row| row.get(0),
   ).unwrap_or_else(|_| "in_progress".to_string());
@@ -869,7 +923,7 @@ fn get_task_items(
          SELECT c.barcode 
          FROM store_catalog c 
          WHERE c.sku = i.sku 
-           AND (?2 = '' OR ?2 = 'default' OR c.revision_id = ?2)
+           AND c.revision_id = ?2
            AND c.barcode IS NOT NULL 
            AND c.barcode != '' 
            AND c.barcode != i.sku
@@ -878,7 +932,7 @@ fn get_task_items(
          SELECT c.barcode 
          FROM store_catalog c 
          WHERE c.sku = i.sku 
-           AND (?2 = '' OR ?2 = 'default' OR c.revision_id = ?2)
+           AND c.revision_id = ?2
            AND c.barcode != '' 
          LIMIT 1
        ), i.sku) as barcode,
@@ -888,7 +942,7 @@ fn get_task_items(
        COALESCE(i.box_number, '') as box_number
      FROM inventory_items i
      WHERE (TRIM(i.location) = ?1 OR i.location = ?1)
-       AND (?2 = '' OR ?2 = 'default' OR i.revision_id = ?2)
+       AND i.revision_id = ?2
      ORDER BY i.updated_at DESC, i.created_at DESC",
   ).map_err(|e| e.to_string())?;
 
@@ -911,10 +965,11 @@ fn get_task_items(
   Ok((status, items))
 }
 
-fn search_catalog(db_path: &Path, query: &str) -> Result<Vec<CatalogSuggestionDto>, String> {
+fn search_catalog(db_path: &Path, query: &str, revision_id: &str) -> Result<Vec<CatalogSuggestionDto>, String> {
   let conn = open_db(db_path)?;
   let q = query.trim();
-  if q.is_empty() {
+  let clean_rev = revision_id.trim();
+  if q.is_empty() || clean_rev.is_empty() {
     return Ok(Vec::new());
   }
 
@@ -927,10 +982,11 @@ fn search_catalog(db_path: &Path, query: &str) -> Result<Vec<CatalogSuggestionDt
   }
 
   let sql = "SELECT sku, name, COALESCE(barcode, '') as barcode FROM store_catalog
-     WHERE sku LIKE ?1 || '%' 
-        OR sku LIKE '%' || ?1 || '%' 
-        OR barcode LIKE ?1 || '%' 
-        OR barcode LIKE '%' || ?1 || '%'
+     WHERE revision_id = ?2
+       AND (sku LIKE ?1 || '%' 
+         OR sku LIKE '%' || ?1 || '%' 
+         OR barcode LIKE ?1 || '%' 
+         OR barcode LIKE '%' || ?1 || '%')
      ORDER BY 
        CASE 
          WHEN sku = ?1 THEN 1
@@ -944,7 +1000,7 @@ fn search_catalog(db_path: &Path, query: &str) -> Result<Vec<CatalogSuggestionDt
      LIMIT 15";
 
   let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
-  let rows = stmt.query_map(params![q], |row| {
+  let rows = stmt.query_map(params![q, clean_rev], |row| {
     Ok(CatalogSuggestionDto {
       sku: row.get(0)?,
       name: row.get(1)?,
@@ -968,10 +1024,11 @@ fn search_catalog(db_path: &Path, query: &str) -> Result<Vec<CatalogSuggestionDt
   Ok(list)
 }
 
-fn get_product_details(db_path: &Path, code: &str) -> Result<Option<ProductDetailDto>, String> {
+fn get_product_details(db_path: &Path, code: &str, revision_id: &str, _store_number: &str) -> Result<Option<ProductDetailDto>, String> {
   let conn = open_db(db_path)?;
   let clean_code = code.trim();
-  if clean_code.is_empty() {
+  let clean_rev = revision_id.trim();
+  if clean_code.is_empty() || clean_rev.is_empty() {
     return Ok(None);
   }
 
@@ -985,7 +1042,8 @@ fn get_product_details(db_path: &Path, code: &str) -> Result<Option<ProductDetai
   let catalog_lookup: Result<(String, String, String), _> = if catalog_exists {
     conn.query_row(
       "SELECT COALESCE(sku, ''), COALESCE(name, ''), COALESCE(barcode, '') FROM store_catalog 
-       WHERE TRIM(sku) = ?1 
+       WHERE revision_id = ?4
+         AND (TRIM(sku) = ?1 
           OR (length(?2) > 0 AND LTRIM(TRIM(sku), '0') = ?2)
           OR (length(?3) > 0 AND TRIM(sku) = ?3)
           OR (length(?1) >= 3 AND sku LIKE ?1 || '%')
@@ -994,7 +1052,7 @@ fn get_product_details(db_path: &Path, code: &str) -> Result<Option<ProductDetai
           OR (length(?2) > 0 AND LTRIM(TRIM(barcode), '0') = ?2)
           OR (length(?3) > 0 AND TRIM(barcode) = ?3)
           OR barcode LIKE ?1 || '%' 
-          OR barcode LIKE '%' || ?1 || '%' 
+          OR barcode LIKE '%' || ?1 || '%')
        ORDER BY 
          CASE 
            WHEN TRIM(barcode) = ?1 OR TRIM(sku) = ?1 THEN 1
@@ -1003,7 +1061,7 @@ fn get_product_details(db_path: &Path, code: &str) -> Result<Option<ProductDetai
          END,
          LENGTH(sku) ASC
        LIMIT 1",
-      params![clean_code, unpadded_digits, digits_only],
+      params![clean_code, unpadded_digits, digits_only, clean_rev],
       |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )
   } else {
@@ -1030,15 +1088,41 @@ fn get_product_details(db_path: &Path, code: &str) -> Result<Option<ProductDetai
 
   let stock_qty: f64 = if stock_exists {
     conn.query_row(
-      "SELECT COALESCE(quantity, 0) FROM store_stock WHERE TRIM(sku) = ?1 LIMIT 1",
-      params![found_sku],
+      "SELECT COALESCE(quantity, 0) FROM store_stock WHERE TRIM(sku) = ?1 AND revision_id = ?2 LIMIT 1",
+      params![found_sku, clean_rev],
       |r| r.get(0),
     ).unwrap_or(0.0)
   } else {
     0.0
   };
 
-  let multiplicity: i64 = 1;
+  let mult_exists: bool = conn
+    .query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name='store_multiplicity'", [], |_| Ok(true))
+    .unwrap_or(false);
+
+  let multiplicity: i64 = if mult_exists {
+    conn.query_row(
+      "SELECT COALESCE(multiplicity, 1) FROM store_multiplicity 
+       WHERE revision_id = ?4
+         AND (TRIM(sku) = ?1 
+          OR TRIM(sku) = ?2
+          OR (length(?3) > 0 AND LTRIM(TRIM(sku), '0') = ?3)
+          OR (length(?1) > 0 AND LTRIM(TRIM(sku), '0') = LTRIM(?1, '0'))
+          OR (length(?5) > 0 AND TRIM(sku) = ?5))
+       ORDER BY 
+         CASE 
+           WHEN TRIM(sku) = ?1 THEN 1 
+           WHEN TRIM(sku) = ?2 THEN 2 
+           ELSE 3 
+         END
+       LIMIT 1",
+      params![found_sku, clean_code, unpadded_digits, clean_rev, digits_only],
+      |r| r.get(0),
+    ).unwrap_or(1)
+  } else {
+    1
+  };
+
   let mut locations = Vec::new();
   let mut total_counted: i64 = 0;
   let mut debarkader_qty: i64 = 0;
@@ -1046,9 +1130,11 @@ fn get_product_details(db_path: &Path, code: &str) -> Result<Option<ProductDetai
 
   if let Ok(mut stmt) = conn.prepare(
     "SELECT COALESCE(location, '') as loc, COALESCE(box_number, '') as box, SUM(quantity) as qty 
-     FROM inventory_items WHERE TRIM(sku) = ?1 AND quantity > 0 GROUP BY loc, box ORDER BY qty DESC"
+     FROM inventory_items 
+     WHERE TRIM(sku) = ?1 AND quantity > 0 AND revision_id = ?2 
+     GROUP BY loc, box ORDER BY qty DESC"
   ) {
-    if let Ok(rows) = stmt.query_map(params![found_sku], |r| {
+    if let Ok(rows) = stmt.query_map(params![found_sku, clean_rev], |r| {
       Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
     }) {
       for (loc, box_num, qty) in rows.flatten() {
@@ -1100,8 +1186,12 @@ fn scan_barcode(
   let clean_loc = location.trim();
   let clean_bc = barcode.trim();
   let clean_box = box_number.trim();
+  let clean_rev = revision_id.trim();
   let qty = if add_qty <= 0 { 1 } else { add_qty };
 
+  if clean_rev.is_empty() {
+    return Err("Не указан идентификатор ревизии (revision_id)".to_string());
+  }
   if clean_loc.is_empty() {
     return Err("Не указана локация/задача".to_string());
   }
@@ -1109,14 +1199,14 @@ fn scan_barcode(
     return Err("Пустой штрихкод".to_string());
   }
 
-  // Защита от дублей: если этот скан уже был сохранен ранее по client_scan_id
+  // Защита от дублей: если этот скан уже был сохранен ранее по client_scan_id в рамках этой ревизии
   if !client_scan_id.is_empty() {
     let already_recorded: Result<(String, String, String, String, i64, String), _> = conn.query_row(
       "SELECT i.id, i.sku, COALESCE(i.sku, ''), i.name, i.quantity, COALESCE(i.box_number, '')
        FROM processed_client_scans p
        JOIN inventory_items i ON i.id = p.item_id
-       WHERE p.client_scan_id = ?1 LIMIT 1",
-      params![client_scan_id],
+       WHERE p.client_scan_id = ?1 AND p.revision_id = ?2 LIMIT 1",
+      params![client_scan_id, clean_rev],
       |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
     );
     if let Ok((id, s, b, n, q, box_num)) = already_recorded {
@@ -1133,8 +1223,8 @@ fn scan_barcode(
   }
 
   let task_status: String = conn.query_row(
-    "SELECT status FROM mobile_tasks WHERE name = ?1",
-    params![clean_loc],
+    "SELECT status FROM mobile_tasks WHERE name = ?1 AND revision_id = ?2",
+    params![clean_loc, clean_rev],
     |r| r.get(0),
   ).unwrap_or_else(|_| "in_progress".to_string());
   if task_status == "completed" {
@@ -1146,7 +1236,8 @@ fn scan_barcode(
 
   let catalog_lookup: Result<(String, String, String), _> = conn.query_row(
     "SELECT COALESCE(sku, ''), COALESCE(name, ''), COALESCE(barcode, '') FROM store_catalog 
-     WHERE TRIM(sku) = ?1 
+     WHERE revision_id = ?4
+       AND (TRIM(sku) = ?1 
         OR (length(?2) > 0 AND LTRIM(TRIM(sku), '0') = ?2)
         OR (length(?3) > 0 AND TRIM(sku) = ?3)
         OR (length(?1) >= 3 AND sku LIKE ?1 || '%')
@@ -1155,7 +1246,7 @@ fn scan_barcode(
         OR (length(?2) > 0 AND LTRIM(TRIM(barcode), '0') = ?2)
         OR (length(?3) > 0 AND TRIM(barcode) = ?3)
         OR barcode LIKE ?1 || '%' 
-        OR barcode LIKE '%' || ?1 || '%' 
+        OR barcode LIKE '%' || ?1 || '%')
      ORDER BY 
        CASE 
          WHEN TRIM(barcode) = ?1 OR TRIM(sku) = ?1 THEN 1
@@ -1164,7 +1255,7 @@ fn scan_barcode(
        END,
        LENGTH(sku) ASC
      LIMIT 1",
-    params![clean_bc, unpadded_digits, digits_only],
+    params![clean_bc, unpadded_digits, digits_only, clean_rev],
     |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
   );
 
@@ -1188,20 +1279,20 @@ fn scan_barcode(
     }
   };
 
+  let task_id = format!("{}_{}", clean_rev, clean_loc);
   let _ = conn.execute(
     "INSERT INTO mobile_tasks (id, revision_id, name, status, created_at, updated_at)
      VALUES (?1, ?2, ?3, 'in_progress', datetime('now', 'localtime'), datetime('now', 'localtime'))
-     ON CONFLICT(name) DO UPDATE SET status = 'in_progress', updated_at = datetime('now', 'localtime')",
-    params![clean_loc, revision_id, clean_loc],
+     ON CONFLICT(id) DO UPDATE SET status = 'in_progress', updated_at = datetime('now', 'localtime')",
+    params![task_id, clean_rev, clean_loc],
   );
 
   let item_status = if is_nd { "nd" } else { "ok" };
 
-  let clean_rev = revision_id.trim();
   let existing_item: Result<(String, i64, String), _> = if clean_box.is_empty() {
     conn.query_row(
       "SELECT id, quantity, COALESCE(box_number, '') FROM inventory_items 
-       WHERE (?3 = '' OR ?3 = 'default' OR revision_id = ?3)
+       WHERE revision_id = ?3
          AND (TRIM(location) = ?1 OR location = ?1) AND sku = ?2 AND (box_number IS NULL OR TRIM(box_number) = '') LIMIT 1",
       params![clean_loc, found_sku, clean_rev],
       |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
@@ -1209,7 +1300,7 @@ fn scan_barcode(
   } else {
     conn.query_row(
       "SELECT id, quantity, COALESCE(box_number, '') FROM inventory_items 
-       WHERE (?4 = '' OR ?4 = 'default' OR revision_id = ?4)
+       WHERE revision_id = ?4
          AND (TRIM(location) = ?1 OR location = ?1) AND sku = ?2 AND TRIM(COALESCE(box_number, '')) = ?3 LIMIT 1",
       params![clean_loc, found_sku, clean_box, clean_rev],
       |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
@@ -1219,7 +1310,7 @@ fn scan_barcode(
   let (item_id, new_total, final_box) = match existing_item {
     Ok((id, current_qty, b)) => {
       let next_qty = current_qty + qty;
-      conn.execute("UPDATE inventory_items SET quantity = ?1, updated_at = datetime('now', 'localtime') WHERE id = ?2", params![next_qty, id])
+      conn.execute("UPDATE inventory_items SET quantity = ?1, updated_at = datetime('now', 'localtime') WHERE id = ?2 AND revision_id = ?3", params![next_qty, id, clean_rev])
         .map_err(|e| format!("Ошибка обновления товара: {}", e))?;
       (id, next_qty, b)
     }
@@ -1228,7 +1319,7 @@ fn scan_barcode(
       conn.execute(
         "INSERT INTO inventory_items (id, revision_id, store_number, name, sku, category, quantity, unit, location, box_number, status, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, '', ?6, 'шт.', ?7, ?8, ?9, datetime('now', 'localtime'), datetime('now', 'localtime'))",
-        params![new_id, revision_id, store_number, found_name, found_sku, qty, clean_loc, clean_box, item_status],
+        params![new_id, clean_rev, store_number, found_name, found_sku, qty, clean_loc, clean_box, item_status],
       ).map_err(|e| format!("Ошибка добавления товара: {}", e))?;
       (new_id, qty, clean_box.to_string())
     }
@@ -1317,17 +1408,18 @@ fn scan_batch(
 
 fn update_item_box(db_path: &Path, revision_id: &str, item_id: &str, box_number: &str, location: &str, user_name: &str, device_name: &str) -> Result<(), String> {
   let conn = open_db(db_path)?;
+  let clean_rev = revision_id.trim();
   let clean_box = box_number.trim();
-  conn.execute("UPDATE inventory_items SET box_number = ?1, updated_at = datetime('now', 'localtime') WHERE id = ?2", params![clean_box, item_id])
+  conn.execute("UPDATE inventory_items SET box_number = ?1, updated_at = datetime('now', 'localtime') WHERE id = ?2 AND revision_id = ?3", params![clean_box, item_id, clean_rev])
     .map_err(|e| e.to_string())?;
   let clean_loc = location.trim();
   if !clean_loc.is_empty() {
-    let _ = conn.execute("UPDATE mobile_tasks SET updated_at = datetime('now', 'localtime') WHERE name = ?1", params![clean_loc]);
+    let _ = conn.execute("UPDATE mobile_tasks SET updated_at = datetime('now', 'localtime') WHERE name = ?1 AND revision_id = ?2", params![clean_loc, clean_rev]);
   }
 
   record_sync_event(
     &conn,
-    revision_id,
+    clean_rev,
     "",
     "box_updated",
     &json!({
@@ -1335,34 +1427,35 @@ fn update_item_box(db_path: &Path, revision_id: &str, item_id: &str, box_number:
       "item_id": item_id,
       "box_number": clean_box,
       "location": clean_loc,
-      "revision_id": revision_id,
+      "revision_id": clean_rev,
       "user_name": user_name,
       "device_name": device_name,
     }),
   );
 
-  touch_client_action(&conn, revision_id, user_name, device_name, &format!("№ коробки {} ({})", clean_box, clean_loc));
+  touch_client_action(&conn, clean_rev, user_name, device_name, &format!("№ коробки {} ({})", clean_box, clean_loc));
 
   Ok(())
 }
 
 fn update_item_qty(db_path: &Path, revision_id: &str, item_id: &str, new_qty: i64, location: &str, user_name: &str, device_name: &str) -> Result<(), String> {
   let conn = open_db(db_path)?;
+  let clean_rev = revision_id.trim();
   if new_qty <= 0 {
-    conn.execute("DELETE FROM inventory_items WHERE id = ?1", params![item_id])
+    conn.execute("DELETE FROM inventory_items WHERE id = ?1 AND revision_id = ?2", params![item_id, clean_rev])
       .map_err(|e| e.to_string())?;
   } else {
-    conn.execute("UPDATE inventory_items SET quantity = ?1, updated_at = datetime('now', 'localtime') WHERE id = ?2", params![new_qty, item_id])
+    conn.execute("UPDATE inventory_items SET quantity = ?1, updated_at = datetime('now', 'localtime') WHERE id = ?2 AND revision_id = ?3", params![new_qty, item_id, clean_rev])
       .map_err(|e| e.to_string())?;
   }
   let clean_loc = location.trim();
   if !clean_loc.is_empty() {
-    let _ = conn.execute("UPDATE mobile_tasks SET updated_at = datetime('now', 'localtime') WHERE name = ?1", params![clean_loc]);
+    let _ = conn.execute("UPDATE mobile_tasks SET updated_at = datetime('now', 'localtime') WHERE name = ?1 AND revision_id = ?2", params![clean_loc, clean_rev]);
   }
 
   record_sync_event(
     &conn,
-    revision_id,
+    clean_rev,
     "",
     "item_updated",
     &json!({
@@ -1370,38 +1463,40 @@ fn update_item_qty(db_path: &Path, revision_id: &str, item_id: &str, new_qty: i6
       "item_id": item_id,
       "quantity": new_qty,
       "location": clean_loc,
-      "revision_id": revision_id,
+      "revision_id": clean_rev,
       "user_name": user_name,
       "device_name": device_name,
     }),
   );
 
-  touch_client_action(&conn, revision_id, user_name, device_name, &format!("Кол-во {} шт. ({})", new_qty, clean_loc));
+  touch_client_action(&conn, clean_rev, user_name, device_name, &format!("Кол-во {} шт. ({})", new_qty, clean_loc));
 
   Ok(())
 }
 
 fn complete_task(db_path: &Path, revision_id: &str, store_number: &str, name: &str, user_name: &str, device_name: &str) -> Result<TaskCompleteResultDto, String> {
   let conn = open_db(db_path)?;
+  let clean_rev = revision_id.trim();
   let clean_name = name.trim();
-  let _ = flush_draft_items(&conn, clean_name, revision_id, store_number);
+  let _ = flush_draft_items(&conn, clean_name, clean_rev, store_number);
 
   let (items_count, total_qty): (i64, i64) = conn.query_row(
-    "SELECT COALESCE(COUNT(DISTINCT sku), 0), COALESCE(SUM(quantity), 0) FROM inventory_items WHERE TRIM(location) = ?1 OR location = ?1",
-    params![clean_name],
+    "SELECT COALESCE(COUNT(DISTINCT sku), 0), COALESCE(SUM(quantity), 0) FROM inventory_items WHERE (TRIM(location) = ?1 OR location = ?1) AND revision_id = ?2",
+    params![clean_name, clean_rev],
     |r| Ok((r.get(0)?, r.get(1)?)),
   ).unwrap_or((0, 0));
 
+  let task_id = format!("{}_{}", clean_rev, clean_name);
   conn.execute(
     "INSERT INTO mobile_tasks (id, revision_id, name, status, created_at, updated_at, completed_at)
      VALUES (?1, ?2, ?3, 'completed', datetime('now', 'localtime'), datetime('now', 'localtime'), datetime('now', 'localtime'))
-     ON CONFLICT(name) DO UPDATE SET status = 'completed', updated_at = datetime('now', 'localtime'), completed_at = datetime('now', 'localtime')",
-    params![clean_name, revision_id, clean_name],
+     ON CONFLICT(id) DO UPDATE SET status = 'completed', updated_at = datetime('now', 'localtime'), completed_at = datetime('now', 'localtime')",
+    params![task_id, clean_rev, clean_name],
   ).map_err(|e| e.to_string())?;
 
   record_sync_event(
     &conn,
-    revision_id,
+    clean_rev,
     store_number,
     "task_completed",
     &json!({
@@ -1409,13 +1504,13 @@ fn complete_task(db_path: &Path, revision_id: &str, store_number: &str, name: &s
       "task": clean_name,
       "items_count": items_count,
       "total_qty": total_qty,
-      "revision_id": revision_id,
+      "revision_id": clean_rev,
       "user_name": user_name,
       "device_name": device_name,
     }),
   );
 
-  touch_client_action(&conn, revision_id, user_name, device_name, &format!("Завершена задача «{}» ({} шт.)", clean_name, total_qty));
+  touch_client_action(&conn, clean_rev, user_name, device_name, &format!("Завершена задача «{}» ({} шт.)", clean_name, total_qty));
 
   Ok(TaskCompleteResultDto {
     success: true,
@@ -1553,7 +1648,7 @@ fn main() {
       })
       .collect();
 
-    let active_rev = query_map.get("rev").cloned().unwrap_or_else(|| "default".to_string());
+    let active_rev = query_map.get("rev").cloned().unwrap_or_default();
     let active_store = query_map.get("store").cloned().unwrap_or_default();
 
     let is_post = method == Method::Post;
@@ -1633,7 +1728,7 @@ fn main() {
 
       (Method::Get, "/api/catalog/search") => {
         let q = query_map.get("q").cloned().unwrap_or_default();
-        match search_catalog(&db_path, &q) {
+        match search_catalog(&db_path, &q, &active_rev) {
           Ok(items) => {
             let _ = request.respond(respond_json(&json!({ "success": true, "items": items }), 200));
           }
@@ -1645,7 +1740,7 @@ fn main() {
 
       (Method::Get, "/api/product/details") => {
         let code = query_map.get("code").or_else(|| query_map.get("q")).cloned().unwrap_or_default();
-        match get_product_details(&db_path, &code) {
+        match get_product_details(&db_path, &code, &active_rev, &active_store) {
           Ok(Some(product)) => {
             let _ = request.respond(respond_json(&json!({ "success": true, "found": true, "product": product }), 200));
           }
@@ -1674,10 +1769,11 @@ fn main() {
         let _ = request.as_reader().read_to_string(&mut body);
         let val: serde_json::Value = serde_json::from_str(&body).unwrap_or(json!({}));
         let task_name = val.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let rev = val.get("revision_id").and_then(|v| v.as_str()).unwrap_or(&active_rev);
         let user_name = val.get("user_name").and_then(|v| v.as_str()).unwrap_or("");
         let device_name = val.get("device_name").and_then(|v| v.as_str()).unwrap_or("");
 
-        match create_task(&db_path, &active_rev, task_name, user_name, device_name) {
+        match create_task(&db_path, rev, task_name, user_name, device_name) {
           Ok(task) => {
             println!("📋 Создана задача: {}", task_name);
             let _ = request.respond(respond_json(&json!({ "success": true, "task": task }), 200));
@@ -1693,10 +1789,11 @@ fn main() {
         let _ = request.as_reader().read_to_string(&mut body);
         let val: serde_json::Value = serde_json::from_str(&body).unwrap_or(json!({}));
         let task_name = val.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let rev = val.get("revision_id").and_then(|v| v.as_str()).unwrap_or(&active_rev);
         let user_name = val.get("user_name").and_then(|v| v.as_str()).unwrap_or("");
         let device_name = val.get("device_name").and_then(|v| v.as_str()).unwrap_or("");
 
-        match delete_task(&db_path, &active_rev, task_name, user_name, device_name) {
+        match delete_task(&db_path, rev, task_name, user_name, device_name) {
           Ok(_) => {
             println!("🗑️  Удалена задача: {}", task_name);
             let _ = request.respond(respond_json(&json!({ "success": true }), 200));
@@ -1708,15 +1805,18 @@ fn main() {
       }
 
       (Method::Get, "/api/task/items") | (Method::Post, "/api/task/items") => {
-        let location_str = if is_post {
+        let (location_str, rev_str, store_str) = if is_post {
           let mut body = String::new();
           let _ = request.as_reader().read_to_string(&mut body);
           let val: serde_json::Value = serde_json::from_str(&body).unwrap_or(json!({}));
-          val.get("location").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_default()
+          let loc = val.get("location").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_default();
+          let r = val.get("revision_id").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| active_rev.clone());
+          let s = val.get("store_number").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| active_store.clone());
+          (loc, r, s)
         } else {
-          query_map.get("location").cloned().unwrap_or_default()
+          (query_map.get("location").cloned().unwrap_or_default(), active_rev.clone(), active_store.clone())
         };
-        match get_task_items(&db_path, &location_str, &active_rev, &active_store) {
+        match get_task_items(&db_path, &location_str, &rev_str, &store_str) {
           Ok((status, items)) => {
             let _ = request.respond(respond_json(&json!({ "success": true, "status": status, "items": items }), 200));
           }
@@ -1775,10 +1875,12 @@ fn main() {
         let _ = request.as_reader().read_to_string(&mut body);
         let val: serde_json::Value = serde_json::from_str(&body).unwrap_or(json!({}));
         let task_name = val.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let rev = val.get("revision_id").and_then(|v| v.as_str()).unwrap_or(&active_rev);
+        let store = val.get("store_number").and_then(|v| v.as_str()).unwrap_or(&active_store);
         let user_name = val.get("user_name").and_then(|v| v.as_str()).unwrap_or("");
         let device_name = val.get("device_name").and_then(|v| v.as_str()).unwrap_or("");
 
-        match complete_task(&db_path, &active_rev, &active_store, task_name, user_name, device_name) {
+        match complete_task(&db_path, rev, store, task_name, user_name, device_name) {
           Ok(res) => {
             println!("🏁 Задача «{}» завершена: {} позиций ({} шт.)", res.task, res.items_count, res.total_qty);
             let _ = request.respond(respond_json(&json!({
@@ -1800,11 +1902,12 @@ fn main() {
         let val: serde_json::Value = serde_json::from_str(&body).unwrap_or(json!({}));
         let item_id = val.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let location = val.get("location").and_then(|v| v.as_str()).unwrap_or("");
+        let rev = val.get("revision_id").and_then(|v| v.as_str()).unwrap_or(&active_rev);
         let user_name = val.get("user_name").and_then(|v| v.as_str()).unwrap_or("");
         let device_name = val.get("device_name").and_then(|v| v.as_str()).unwrap_or("");
 
         if let Some(box_num) = val.get("box_number").and_then(|v| v.as_str()) {
-          match update_item_box(&db_path, &active_rev, item_id, box_num, location, user_name, device_name) {
+          match update_item_box(&db_path, rev, item_id, box_num, location, user_name, device_name) {
             Ok(_) => {
               let _ = request.respond(respond_json(&json!({ "success": true }), 200));
             }
@@ -1814,7 +1917,7 @@ fn main() {
           }
         } else {
           let new_qty = val.get("quantity").and_then(|v| v.as_i64()).unwrap_or(0);
-          match update_item_qty(&db_path, &active_rev, item_id, new_qty, location, user_name, device_name) {
+          match update_item_qty(&db_path, rev, item_id, new_qty, location, user_name, device_name) {
             Ok(_) => {
               let _ = request.respond(respond_json(&json!({ "success": true }), 200));
             }
@@ -1907,8 +2010,9 @@ fn main() {
         let items = val.get("items").and_then(|v| v.as_array()).cloned().unwrap_or_default();
         let catalog = val.get("catalog").and_then(|v| v.as_array()).cloned().unwrap_or_default();
         let stock = val.get("stock").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let multiplicity = val.get("multiplicity").and_then(|v| v.as_array()).cloned().unwrap_or_default();
 
-        match sync_upload_data(&db_path, rev, store, tasks, items, catalog, stock) {
+        match sync_upload_data(&db_path, rev, store, tasks, items, catalog, stock, multiplicity) {
           Ok(res) => {
             let _ = request.respond(respond_json(&res, 200));
           }
