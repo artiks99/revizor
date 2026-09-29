@@ -141,7 +141,7 @@ async function main() {
       const sshCmd = [
         `ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new`,
         `-p ${vdsPort} ${vdsUser}@${vdsHost}`,
-        `"[ -f ${vdsPath}/deploy.sh ] && (cd ${vdsPath} && git pull origin main && ./deploy.sh) || echo 'ℹ️ deploy.sh еще не развернут на VDS (будет настроен на этапе 2).'"`
+        `"[ -f ${vdsPath}/deploy.sh ] && (cd ${vdsPath} && git pull origin main && chmod +x ./deploy.sh && ./deploy.sh) || echo 'ℹ️ deploy.sh еще не развернут на VDS (будет настроен на этапе 2).'"`
       ].join(' ')
       execSync(sshCmd, { stdio: 'inherit', timeout: 120_000 })
     } catch (err) {
